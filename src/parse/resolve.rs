@@ -230,6 +230,56 @@ pub fn load_tsconfig(project_root: &Path) -> Result<Option<TsConfig>> {
     }))
 }
 
+/// Resolve a Python absolute dotted module path to a project file.
+///
+/// Resolution order for `spec = "utils.auth"`:
+/// 1. `<root>/src/utils/auth.py`
+/// 2. `<root>/src/utils/auth/__init__.py`
+/// 3. `<root>/utils/auth.py`
+/// 4. `<root>/utils/auth/__init__.py`
+///
+/// A bare package name (e.g. `"utils"`) resolves the same way, preferring
+/// the `.py` file if it exists, otherwise the `__init__.py`.
+///
+/// # Notes on the `.` sentinel
+///
+/// The Python driver stores bare relative imports (`from . import foo`) with a
+/// sentinel `library = "."`. When `spec` is `"."` or empty, this function
+/// returns [`ResolveResult::Unresolved`] because the dot-count needed to walk
+/// up directories is not propagated by the driver yet (Phase 1 limitation).
+///
+/// The `from_file` parameter is accepted for API consistency with
+/// [`resolve_ts`] but is not used in Phase 1 — Python uses absolute module
+/// paths rooted at the project, not file-relative specifiers.
+#[must_use]
+pub fn resolve_py(project_root: &Path, _from_file: &Path, spec: &str) -> ResolveResult {
+    if spec.is_empty() || spec == "." {
+        // Bare relative import — the driver doesn't propagate dot-count yet.
+        // Return Unresolved rather than guessing; Task 10 v2 can revisit.
+        return ResolveResult::Unresolved;
+    }
+
+    let rel: PathBuf = spec.split('.').collect();
+    let candidates = [
+        project_root.join("src").join(&rel).with_extension("py"),
+        project_root.join("src").join(&rel).join("__init__.py"),
+        project_root.join(&rel).with_extension("py"),
+        project_root.join(&rel).join("__init__.py"),
+    ];
+    for c in &candidates {
+        if c.is_file() {
+            return ResolveResult::Internal(c.clone());
+        }
+    }
+
+    // Not found on disk — treat first dotted segment as an external library.
+    let library = spec.split('.').next().unwrap_or(spec).to_owned();
+    ResolveResult::External {
+        library,
+        symbols: Vec::new(),
+    }
+}
+
 /// Strip `//` line comments from a JSONC string.
 ///
 /// Only line comments are handled. Block comments are rare in tsconfig files
@@ -414,5 +464,71 @@ mod tests {
             s.to_lowercase().contains("tsconfig") || s.to_lowercase().contains("config"),
             "error should mention tsconfig; got {s}"
         );
+    }
+
+    // ── Python resolver tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn resolves_python_dotted_module_under_src() {
+        let tmp = tempdir_with(&[
+            ("src/handler.py", ""),
+            ("src/utils/auth.py", ""),
+            ("src/utils/__init__.py", ""),
+        ]);
+        let from = tmp.path().join("src/handler.py");
+        let r = resolve_py(tmp.path(), &from, "utils.auth");
+        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/auth.py")));
+    }
+
+    #[test]
+    fn resolves_python_package_init() {
+        let tmp = tempdir_with(&[
+            ("src/handler.py", ""),
+            ("src/utils/__init__.py", ""),
+        ]);
+        let from = tmp.path().join("src/handler.py");
+        let r = resolve_py(tmp.path(), &from, "utils");
+        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/__init__.py")));
+    }
+
+    #[test]
+    fn resolves_python_module_without_src_prefix() {
+        let tmp = tempdir_with(&[
+            ("handler.py", ""),
+            ("utils/auth.py", ""),
+        ]);
+        let from = tmp.path().join("handler.py");
+        let r = resolve_py(tmp.path(), &from, "utils.auth");
+        assert_eq!(r, ResolveResult::Internal(tmp.path().join("utils/auth.py")));
+    }
+
+    #[test]
+    fn unresolved_python_falls_back_to_library_as_external() {
+        let tmp = tempdir_with(&[("src/a.py", "")]);
+        let from = tmp.path().join("src/a.py");
+        let r = resolve_py(tmp.path(), &from, "numpy");
+        match r {
+            ResolveResult::External { library, .. } => assert_eq!(library, "numpy"),
+            _ => panic!("expected External, got {r:?}"),
+        }
+    }
+
+    #[test]
+    fn python_dotted_external_keeps_first_segment() {
+        let tmp = tempdir_with(&[("src/a.py", "")]);
+        let from = tmp.path().join("src/a.py");
+        let r = resolve_py(tmp.path(), &from, "numpy.linalg");
+        match r {
+            ResolveResult::External { library, .. } => assert_eq!(library, "numpy"),
+            _ => panic!("expected External, got {r:?}"),
+        }
+    }
+
+    #[test]
+    fn python_dot_sentinel_is_unresolved() {
+        let tmp = tempdir_with(&[("src/a.py", "")]);
+        let from = tmp.path().join("src/a.py");
+        let r = resolve_py(tmp.path(), &from, ".");
+        assert_eq!(r, ResolveResult::Unresolved);
     }
 }
