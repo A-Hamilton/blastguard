@@ -2,14 +2,18 @@
 //!
 //! Phase 1.2 emits function/async-function/class/method/interface/type-alias
 //! symbols, plus `LibraryImport` records for bare-specifier (external) imports.
-//! Internal/relative imports and call edges are Task 2.
+//! Internal/relative imports produce `Imports` edges; call expressions inside a
+//! function/method produce `Calls` edges (intra-file only; Task 13 resolves
+//! cross-file calls).
 
 use std::path::Path;
 
 use streaming_iterator::StreamingIterator as _;
 use tree_sitter::{Language, Parser, Query, QueryCursor};
 
-use crate::graph::types::{LibraryImport, Symbol, SymbolId, SymbolKind, Visibility};
+use crate::graph::types::{
+    Confidence, Edge, EdgeKind, LibraryImport, Symbol, SymbolId, SymbolKind, Visibility,
+};
 use crate::parse::body_hash::body_hash;
 use crate::parse::symbols::render_signature;
 use crate::parse::ParseOutput;
@@ -84,8 +88,9 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
                         let literal = node.utf8_text(src_bytes).unwrap_or("");
                         emit_import(literal, node, path, &mut out);
                     }
-                    // All other captures (name helper nodes, call.callee/site
-                    // for Task 2, etc.) are intentionally ignored here.
+                    "call.callee" => emit_call(node, source, path, &mut out),
+                    // All other captures (name helper nodes, call.site, etc.)
+                    // are intentionally ignored here.
                     _ => {}
                 }
             }
@@ -210,11 +215,38 @@ fn emit_import(
     if source_specifier.is_empty() {
         return;
     }
-    // Relative and absolute paths are internal — Task 2 turns those into
-    // graph Imports edges. Nothing to do here.
+    let line = u32::try_from(node.start_position().row)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+
+    // Relative (`./foo`, `../bar`) and absolute (`/abs`) paths are internal —
+    // emit an Imports edge. Task 8's resolver will rewrite `to.file` from the
+    // raw specifier to the canonical on-disk path.
     if source_specifier.starts_with('.') || source_specifier.starts_with('/') {
+        let module_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_owned();
+        out.edges.push(Edge {
+            from: SymbolId {
+                file: path.to_path_buf(),
+                name: module_name,
+                kind: SymbolKind::Module,
+            },
+            to: SymbolId {
+                file: std::path::PathBuf::from(source_specifier),
+                name: String::new(),
+                kind: SymbolKind::Module,
+            },
+            kind: EdgeKind::Imports,
+            line,
+            confidence: Confidence::Inferred,
+        });
         return;
     }
+
+    // Bare specifiers are external (npm/yarn) library imports.
     // For scoped packages (@scope/pkg or @scope/pkg/subpath) the canonical
     // npm identifier is "@scope/pkg" — keep both the scope and the name.
     // For unscoped packages strip any subpath (lodash/merge → lodash).
@@ -231,9 +263,6 @@ fn emit_import(
             .unwrap_or(source_specifier)
             .to_owned()
     };
-    let line = u32::try_from(node.start_position().row)
-        .unwrap_or(u32::MAX)
-        .saturating_add(1);
 
     out.library_imports.push(LibraryImport {
         library,
@@ -253,6 +282,85 @@ fn first_child_text_is(node: tree_sitter::Node<'_>, source: &str, needle: &str) 
         }
     }
     false
+}
+
+/// Emit a [`Calls`] edge when a call expression's callee lies inside a named
+/// function or method. Top-level (module-scope) calls are silently dropped —
+/// there is no meaningful `from` symbol to attribute them to.
+fn emit_call(
+    callee_node: tree_sitter::Node<'_>,
+    source: &str,
+    path: &Path,
+    out: &mut ParseOutput,
+) {
+    let src_bytes = source.as_bytes();
+    let Ok(callee_name) = callee_node.utf8_text(src_bytes) else {
+        return;
+    };
+    if callee_name.is_empty() {
+        return;
+    }
+    let Some((from_name, from_kind)) = enclosing_fn(callee_node, source) else {
+        // Call at module scope — nothing to attribute it to.
+        return;
+    };
+
+    let line = u32::try_from(callee_node.start_position().row)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+
+    out.edges.push(Edge {
+        from: SymbolId {
+            file: path.to_path_buf(),
+            name: from_name,
+            kind: from_kind,
+        },
+        to: SymbolId {
+            file: path.to_path_buf(),
+            name: callee_name.to_owned(),
+            kind: SymbolKind::Function, // Callee's real kind is unknown until cross-file resolution (Task 13).
+        },
+        kind: EdgeKind::Calls,
+        line,
+        confidence: Confidence::Inferred,
+    });
+}
+
+/// Walk up the tree-sitter ancestor chain to find the nearest enclosing named
+/// `function_declaration` or `method_definition`. Returns `None` for calls at
+/// module scope (no enclosing function).
+fn enclosing_fn(
+    mut node: tree_sitter::Node<'_>,
+    source: &str,
+) -> Option<(String, SymbolKind)> {
+    while let Some(parent) = node.parent() {
+        match parent.kind() {
+            "function_declaration" => {
+                let name = parent
+                    .child_by_field_name("name")?
+                    .utf8_text(source.as_bytes())
+                    .ok()?
+                    .to_owned();
+                let kind = if first_child_text_is(parent, source, "async") {
+                    SymbolKind::AsyncFunction
+                } else {
+                    SymbolKind::Function
+                };
+                return Some((name, kind));
+            }
+            "method_definition" => {
+                let name = parent
+                    .child_by_field_name("name")?
+                    .utf8_text(source.as_bytes())
+                    .ok()?
+                    .to_owned();
+                return Some((name, SymbolKind::Method));
+            }
+            _ => {}
+        }
+        node = parent;
+    }
+    None
 }
 
 /// Split a parameter list string like `"(req: Request, res: Response)"` into
@@ -354,5 +462,61 @@ import { helper } from "./utils/helper";
         let src = r#"import { x } from "@scope/pkg/sub";"#;
         let out = extract(&PathBuf::from("src/a.ts"), src);
         assert!(out.library_imports.iter().any(|li| li.library == "@scope/pkg"));
+    }
+
+    #[test]
+    fn internal_import_becomes_imports_edge_not_library_import() {
+        let out = extract(&PathBuf::from("src/handler.ts"), SAMPLE);
+        // Library imports still contain lodash and nothing else that's relative.
+        assert!(!out.library_imports.iter().any(|li| li.library.starts_with("./")));
+
+        // An Imports edge exists for ./utils/helper.
+        let has_internal = out.edges.iter().any(|e| {
+            e.kind == crate::graph::types::EdgeKind::Imports
+                && e.confidence == crate::graph::types::Confidence::Inferred
+                && e.to.file.to_string_lossy().contains("utils/helper")
+        });
+        assert!(has_internal, "expected Imports edge for ./utils/helper; edges = {:?}", out.edges);
+    }
+
+    #[test]
+    fn intra_file_call_produces_calls_edge_with_enclosing_fn() {
+        // processRequest() calls handler() — we should see an edge
+        // Calls { from: processRequest, to: handler }.
+        let out = extract(&PathBuf::from("src/handler.ts"), SAMPLE);
+        let has_call = out.edges.iter().any(|e| {
+            e.kind == crate::graph::types::EdgeKind::Calls
+                && e.from.name == "processRequest"
+                && e.to.name == "handler"
+        });
+        assert!(has_call, "expected processRequest -> handler edge; edges = {:?}", out.edges);
+    }
+
+    #[test]
+    fn method_call_tracked_with_enclosing_method_as_from() {
+        // Handler.handle() calls processRequest() — expect Calls edge from handle.
+        let out = extract(&PathBuf::from("src/handler.ts"), SAMPLE);
+        let has_call = out.edges.iter().any(|e| {
+            e.kind == crate::graph::types::EdgeKind::Calls
+                && e.from.name == "handle"
+                && e.to.name == "processRequest"
+        });
+        assert!(has_call, "expected handle -> processRequest edge; edges = {:?}", out.edges);
+    }
+
+    #[test]
+    fn top_level_call_outside_any_function_is_ignored() {
+        let src = "someGlobal();\nexport function wrapper() { helper(); }\n";
+        let out = extract(&PathBuf::from("src/a.ts"), src);
+        // `someGlobal()` at module scope has no enclosing function — no Calls edge
+        // should attribute it. Only `wrapper -> helper` should exist.
+        let calls: Vec<_> = out
+            .edges
+            .iter()
+            .filter(|e| e.kind == crate::graph::types::EdgeKind::Calls)
+            .collect();
+        assert_eq!(calls.len(), 1, "got {calls:?}");
+        assert_eq!(calls[0].from.name, "wrapper");
+        assert_eq!(calls[0].to.name, "helper");
     }
 }
