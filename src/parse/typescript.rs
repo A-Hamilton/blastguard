@@ -18,17 +18,16 @@ use crate::parse::ParseOutput;
 const QUERY_SRC: &str = include_str!("../../queries/typescript.scm");
 
 thread_local! {
-    /// One `Parser` per thread so rayon workers can each hold their own
-    /// without synchronisation. Parsers are not `Send`, so this is the
-    /// idiomatic pattern for rayon-parallel parsing.
-    static PARSER: std::cell::RefCell<Parser> = std::cell::RefCell::new({
-        let mut p = Parser::new();
+    /// Parser and compiled query per thread. Both are not `Send` so this is
+    /// the correct place to own them for rayon-parallel indexing.
+    static TS_STATE: std::cell::RefCell<(Parser, Query)> = std::cell::RefCell::new({
+        let mut parser = Parser::new();
         let lang: Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
-        // SAFETY: LANGUAGE_TYPESCRIPT is a compile-time constant from a valid
-        // tree-sitter grammar. Failure here would be a bug in the grammar
-        // crate itself — panic is appropriate.
-        p.set_language(&lang).expect("tree-sitter TypeScript grammar must load");
-        p
+        // Unreachable in a correctly-built binary — the grammar crate is a
+        // compile-time constant and the query is validated by `cargo test`.
+        parser.set_language(&lang).expect("tree-sitter TypeScript grammar must load");
+        let query = Query::new(&lang, QUERY_SRC).expect("typescript.scm must be a valid query");
+        (parser, query)
     });
 }
 
@@ -47,8 +46,9 @@ thread_local! {
 /// unreachable in a correctly-built binary).
 #[must_use = "parsed symbols and imports should be ingested into the graph"]
 pub fn extract(path: &Path, source: &str) -> ParseOutput {
-    PARSER.with(|cell| {
-        let mut parser = cell.borrow_mut();
+    TS_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        let (parser, query) = &mut *state;
         let Some(tree) = parser.parse(source, None) else {
             return ParseOutput {
                 partial_parse: true,
@@ -58,11 +58,6 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
         let root = tree.root_node();
         let partial_parse = root.has_error();
 
-        let lang: Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
-        // The query source is embedded at compile time and validated by the
-        // tree-sitter grammar. A panic here means the .scm file has a syntax
-        // error — fix the query file rather than swallowing it.
-        let query = Query::new(&lang, QUERY_SRC).expect("typescript.scm must be a valid query");
         let mut cursor = QueryCursor::new();
         let mut out = ParseOutput {
             partial_parse,
@@ -70,7 +65,7 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
         };
 
         let src_bytes = source.as_bytes();
-        let mut matches = cursor.matches(&query, root, src_bytes);
+        let mut matches = cursor.matches(query, root, src_bytes);
         while let Some(m) = matches.next() {
             for capture in m.captures {
                 let capture_name = query.capture_names()[capture.index as usize];
@@ -180,7 +175,7 @@ fn emit_simple(
         return;
     }
     let body_text = node.utf8_text(src_bytes).unwrap_or("");
-    let signature = format!("{kind:?} {name}");
+    let signature = name.clone();
     let line_start = u32::try_from(node.start_position().row)
         .unwrap_or(u32::MAX)
         .saturating_add(1);
@@ -212,17 +207,30 @@ fn emit_import(
     path: &Path,
     out: &mut ParseOutput,
 ) {
+    if source_specifier.is_empty() {
+        return;
+    }
     // Relative and absolute paths are internal — Task 2 turns those into
     // graph Imports edges. Nothing to do here.
     if source_specifier.starts_with('.') || source_specifier.starts_with('/') {
         return;
     }
-    // Extract the package name only (drop any subpath like `lodash/fp`).
-    let library = source_specifier
-        .split('/')
-        .next()
-        .unwrap_or(source_specifier)
-        .to_owned();
+    // For scoped packages (@scope/pkg or @scope/pkg/subpath) the canonical
+    // npm identifier is "@scope/pkg" — keep both the scope and the name.
+    // For unscoped packages strip any subpath (lodash/merge → lodash).
+    let library = if source_specifier.starts_with('@') {
+        let mut parts = source_specifier.splitn(3, '/');
+        match (parts.next(), parts.next()) {
+            (Some(scope), Some(pkg)) => format!("{scope}/{pkg}"),
+            _ => source_specifier.to_owned(),
+        }
+    } else {
+        source_specifier
+            .split('/')
+            .next()
+            .unwrap_or(source_specifier)
+            .to_owned()
+    };
     let line = u32::try_from(node.start_position().row)
         .unwrap_or(u32::MAX)
         .saturating_add(1);
@@ -321,5 +329,30 @@ import { helper } from "./utils/helper";
         // `./utils/helper` is internal — Task 2 handles that path. Task 1 must
         // NOT emit it as a library_import.
         assert!(!out.library_imports.iter().any(|li| li.library.starts_with("./")));
+    }
+
+    #[test]
+    fn scoped_package_keeps_scope_and_name() {
+        let src = r#"import { Button } from "@tanstack/react-query";"#;
+        let out = extract(&PathBuf::from("src/a.ts"), src);
+        assert!(
+            out.library_imports.iter().any(|li| li.library == "@tanstack/react-query"),
+            "expected canonical @scope/pkg library name, got {:?}",
+            out.library_imports
+        );
+    }
+
+    #[test]
+    fn subpath_import_strips_subpath_but_keeps_package() {
+        let src = r#"import { merge } from "lodash/merge";"#;
+        let out = extract(&PathBuf::from("src/a.ts"), src);
+        assert!(out.library_imports.iter().any(|li| li.library == "lodash"));
+    }
+
+    #[test]
+    fn scoped_subpath_keeps_full_scope_and_name() {
+        let src = r#"import { x } from "@scope/pkg/sub";"#;
+        let out = extract(&PathBuf::from("src/a.ts"), src);
+        assert!(out.library_imports.iter().any(|li| li.library == "@scope/pkg"));
     }
 }
