@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ignore::gitignore::Gitignore;
 use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, DebouncedEvent, DebounceEventResult};
 use tokio::task::JoinHandle;
@@ -82,14 +83,40 @@ pub fn spawn_watcher(
     Ok(handle)
 }
 
-fn handle_event(_event: &DebouncedEvent, _project_root: &Path, _graph: &Arc<Mutex<CodeGraph>>) {
-    // Task 3 populates.
+/// A file event is "relevant" when all three are true:
+/// 1. It lives inside `project_root` (not an unrelated absolute path).
+/// 2. Its path isn't blocked by the project's gitignore set.
+/// 3. `detect_language` recognises its extension.
+#[must_use]
+pub(crate) fn is_relevant(path: &Path, project_root: &Path, gitignore: &Gitignore) -> bool {
+    let Ok(rel) = path.strip_prefix(project_root) else {
+        return false;
+    };
+    if gitignore
+        .matched_path_or_any_parents(rel, /* is_dir = */ false)
+        .is_ignore()
+    {
+        return false;
+    }
+    detect_language(path).is_some()
 }
 
-// Suppress unused import warning during Tasks 1–2 while handle_event is a stub.
-#[allow(dead_code)]
-fn _detect_language_used(p: &Path) -> bool {
-    detect_language(p).is_some()
+/// Load the `.gitignore` at `project_root`. Returns an empty matcher when
+/// no gitignore is present.
+pub(crate) fn load_gitignore(project_root: &Path) -> Gitignore {
+    let gi_path = project_root.join(".gitignore");
+    if !gi_path.exists() {
+        return Gitignore::empty();
+    }
+    let (gi, _err) = Gitignore::new(&gi_path);
+    gi
+}
+
+fn handle_event(event: &DebouncedEvent, project_root: &Path, _graph: &Arc<Mutex<CodeGraph>>) {
+    let gi = load_gitignore(project_root);
+    if is_relevant(&event.path, project_root, &gi) {
+        // Task 3 fills the reindex body.
+    }
 }
 
 #[cfg(test)]
@@ -101,5 +128,48 @@ mod tests {
         let graph = Arc::new(Mutex::new(CodeGraph::new()));
         let result = spawn_watcher(PathBuf::from("/nonexistent/path/xyz123"), graph);
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[test]
+    fn source_extension_is_relevant() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let gi = Gitignore::empty();
+        assert!(is_relevant(&tmp.path().join("src/a.ts"), tmp.path(), &gi));
+        assert!(is_relevant(&tmp.path().join("src/b.py"), tmp.path(), &gi));
+        assert!(is_relevant(&tmp.path().join("src/c.rs"), tmp.path(), &gi));
+    }
+
+    #[test]
+    fn non_source_extension_is_filtered() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let gi = Gitignore::empty();
+        assert!(!is_relevant(&tmp.path().join("README.md"), tmp.path(), &gi));
+        assert!(!is_relevant(&tmp.path().join("Cargo.toml"), tmp.path(), &gi));
+    }
+
+    #[test]
+    fn gitignored_path_is_filtered() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(".gitignore"), "node_modules/\ntarget/\n")
+            .expect("gitignore");
+        let gi = load_gitignore(tmp.path());
+        assert!(!is_relevant(
+            &tmp.path().join("node_modules/pkg.ts"),
+            tmp.path(),
+            &gi
+        ));
+        assert!(is_relevant(&tmp.path().join("src/a.ts"), tmp.path(), &gi));
+    }
+
+    #[test]
+    fn path_outside_root_is_filtered() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let gi = Gitignore::empty();
+        assert!(!is_relevant(Path::new("/tmp/unrelated.ts"), tmp.path(), &gi));
     }
 }
