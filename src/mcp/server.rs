@@ -15,9 +15,12 @@ use anyhow::Context;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{
-    CallToolResult, Implementation, ServerCapabilities, ServerInfo,
+    AnnotateAble as _, CallToolResult, Implementation, ListResourcesResult,
+    PaginatedRequestParams, RawResource, ReadResourceRequestParams, ReadResourceResult,
+    ResourceContents, ServerCapabilities, ServerInfo,
 };
-use rmcp::{tool, tool_handler, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer};
 use rmcp::handler::server::ServerHandler;
 use rmcp::service::ServiceExt as _;
 use schemars::JsonSchema;
@@ -209,7 +212,8 @@ is attribution: linking test failures to your own recent edits.",
 // ── ServerHandler impl ────────────────────────────────────────────────────────
 
 /// `#[tool_handler]` generates `call_tool` + `list_tools` methods that
-/// delegate to `self.tool_router`.
+/// delegate to `self.tool_router`. The additional async methods below handle
+/// the `blastguard://status` resource.
 #[tool_handler]
 impl ServerHandler for BlastGuardServer {
     /// Advertise the server identity and capabilities to connecting clients.
@@ -217,6 +221,7 @@ impl ServerHandler for BlastGuardServer {
         ServerInfo::new(
             ServerCapabilities::builder()
                 .enable_tools()
+                .enable_resources()
                 .build(),
         )
         .with_server_info(Implementation::new(
@@ -227,6 +232,44 @@ impl ServerHandler for BlastGuardServer {
             "BlastGuard: AST graph search, cascade-aware edits, and test-failure \
              attribution for AI coding agents. Tools: search, apply_change, run_tests.",
         )
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _ctx: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        // `Resource = Annotated<RawResource>`; `no_annotation()` from `AnnotateAble`
+        // wraps the raw resource with `annotations: None`.
+        let resource = RawResource::new("blastguard://status", "Status")
+            .with_description(
+                "Compact project overview: graph node count, languages, recent edits, last test run.",
+            )
+            .with_mime_type("text/plain")
+            .no_annotation();
+        Ok(ListResourcesResult::with_all_items(vec![resource]))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _ctx: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, ErrorData> {
+        if request.uri == "blastguard://status" {
+            let text = crate::mcp::status::render(
+                &self.graph,
+                &self.session,
+                &self.project_root,
+            );
+            return Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                text,
+                "blastguard://status",
+            )]));
+        }
+        Err(ErrorData::resource_not_found(
+            format!("unknown resource: {}", request.uri),
+            None,
+        ))
     }
 }
 
