@@ -29,4 +29,182 @@ pub struct TsConfigSnapshot {
     pub paths: HashMap<String, Vec<String>>,
 }
 
-// TODO(phase-1.4): load(path), save(path, &CacheFile), BLAKE3 merkle helpers.
+// TODO(phase-1.4): load(path), save(path, &CacheFile).
+
+use std::io::Read;
+use std::path::Path;
+
+use crate::error::{BlastGuardError, Result};
+
+/// BLAKE3 hash of a file's content, truncated to the first 8 bytes as a `u64`
+/// (little-endian). Streams the file in 8 KB chunks so we never OOM on large
+/// inputs.
+///
+/// # Errors
+/// Returns [`BlastGuardError::Io`] when the file cannot be opened or read.
+///
+/// # Panics
+/// Never panics in practice: the `expect` calls are on fixed-size BLAKE3 digest
+/// slicing (digest is always 32 bytes) and are unreachable by construction.
+#[must_use = "use the returned hash or propagate the error"]
+pub fn hash_file(path: &Path) -> Result<u64> {
+    let mut hasher = blake3::Hasher::new();
+    let mut file = std::fs::File::open(path).map_err(|source| BlastGuardError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf).map_err(|source| BlastGuardError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
+    // 64 bits of entropy is plenty for cache keying. BLAKE3's first 8 bytes
+    // are uniformly distributed.
+    Ok(u64::from_le_bytes(
+        digest.as_bytes()[..8]
+            .try_into()
+            .expect("digest is always 32 bytes"),
+    ))
+}
+
+/// Merkle hash of a directory tree. Sorted child order makes the result
+/// deterministic. Each child contributes its name plus its own hash
+/// (recursive for sub-directories, [`hash_file`] for regular files).
+/// Non-regular entries (symlinks, devices) are skipped.
+///
+/// # Errors
+/// Returns [`BlastGuardError::Io`] on any directory-read or file-hash failure.
+///
+/// # Panics
+/// Never panics in practice: the `expect` calls are on fixed-size BLAKE3 digest
+/// slicing (digest is always 32 bytes) and are unreachable by construction.
+#[must_use = "directory hash should be stored or compared"]
+pub fn hash_directory_tree(dir: &Path) -> Result<u64> {
+    let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)
+        .map_err(|source| BlastGuardError::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?
+        .filter_map(std::result::Result::ok)
+        .collect();
+    entries.sort_by_key(std::fs::DirEntry::path);
+
+    let mut hasher = blake3::Hasher::new();
+    for entry in entries {
+        let file_type = entry.file_type().map_err(|source| BlastGuardError::Io {
+            path: entry.path(),
+            source,
+        })?;
+        let name = entry.file_name();
+        hasher.update(name.as_encoded_bytes());
+        let child_hash = if file_type.is_dir() {
+            hash_directory_tree(&entry.path())?
+        } else if file_type.is_file() {
+            hash_file(&entry.path())?
+        } else {
+            // Symlinks / devices — skip rather than dereference.
+            continue;
+        };
+        hasher.update(&child_hash.to_le_bytes());
+    }
+    Ok(u64::from_le_bytes(
+        hasher
+            .finalize()
+            .as_bytes()[..8]
+            .try_into()
+            .expect("digest is always 32 bytes"),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_hash_is_deterministic_for_same_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let p = tmp.path().join("a.ts");
+        std::fs::write(&p, b"hello world").expect("write");
+        let h1 = hash_file(&p).expect("hash");
+        let h2 = hash_file(&p).expect("hash");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn file_hash_differs_when_content_changes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let p = tmp.path().join("a.ts");
+        std::fs::write(&p, b"one").expect("write");
+        let h1 = hash_file(&p).expect("hash");
+        std::fs::write(&p, b"two").expect("write");
+        let h2 = hash_file(&p).expect("hash");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn file_hash_handles_large_streaming_input() {
+        // Write > 8 KB so the streaming read loop runs at least twice.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let p = tmp.path().join("big.bin");
+        let bytes: Vec<u8> = (0..32_000_u32)
+            .map(|i| u8::try_from(i % 256).expect("i % 256 always fits u8"))
+            .collect();
+        std::fs::write(&p, &bytes).expect("write");
+        let h = hash_file(&p).expect("hash");
+        // Compare to all-at-once hash via blake3::hash for regression.
+        let expected = blake3::hash(&bytes);
+        let expected_u64 =
+            u64::from_le_bytes(expected.as_bytes()[..8].try_into().expect("8 bytes"));
+        assert_eq!(h, expected_u64);
+    }
+
+    #[test]
+    fn directory_hash_changes_when_child_content_changes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.ts"), b"one").expect("write");
+        let h1 = hash_directory_tree(tmp.path()).expect("hash");
+        std::fs::write(tmp.path().join("a.ts"), b"two").expect("write");
+        let h2 = hash_directory_tree(tmp.path()).expect("hash");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn directory_hash_changes_when_file_added() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.ts"), b"one").expect("write");
+        let h1 = hash_directory_tree(tmp.path()).expect("hash");
+        std::fs::write(tmp.path().join("b.ts"), b"one").expect("write");
+        let h2 = hash_directory_tree(tmp.path()).expect("hash");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn directory_hash_traverses_subdirs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("sub")).expect("mkdir");
+        std::fs::write(tmp.path().join("sub/a.ts"), b"one").expect("write");
+        let h1 = hash_directory_tree(tmp.path()).expect("hash");
+        std::fs::write(tmp.path().join("sub/a.ts"), b"two").expect("write");
+        let h2 = hash_directory_tree(tmp.path()).expect("hash");
+        assert_ne!(h1, h2, "nested change must ripple up to root hash");
+    }
+
+    #[test]
+    fn directory_hash_is_stable_across_calls() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("a.ts"), b"one").expect("write");
+        std::fs::write(tmp.path().join("b.py"), b"two").expect("write");
+        std::fs::create_dir_all(tmp.path().join("sub")).expect("mkdir");
+        std::fs::write(tmp.path().join("sub/c.rs"), b"three").expect("write");
+        let h1 = hash_directory_tree(tmp.path()).expect("hash");
+        let h2 = hash_directory_tree(tmp.path()).expect("hash");
+        assert_eq!(h1, h2);
+    }
+}
