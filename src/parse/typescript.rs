@@ -606,4 +606,22 @@ export function outer() {
             out.edges
         );
     }
+
+    const BROKEN_TS: &str = r"
+export function good() { return 1; }
+this is { not valid :: syntax
+export function alsoGood() { return 2; }
+";
+
+    #[test]
+    fn partial_parse_still_extracts_what_parsed() {
+        let out = extract(&PathBuf::from("src/broken.ts"), BROKEN_TS);
+        assert!(out.partial_parse, "partial flag should be set on broken input");
+        assert!(out.symbols.iter().any(|s| s.id.name == "good"),
+            "expected to still extract `good`; got {:?}",
+            out.symbols.iter().map(|s| &s.id.name).collect::<Vec<_>>());
+        assert!(out.symbols.iter().any(|s| s.id.name == "alsoGood"),
+            "expected to still extract `alsoGood`; got {:?}",
+            out.symbols.iter().map(|s| &s.id.name).collect::<Vec<_>>());
+    }
 }

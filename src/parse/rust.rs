@@ -631,4 +631,18 @@ fn private_helper() {
             .expect("helper missing");
         assert_eq!(sym.visibility, Visibility::Public);
     }
+
+    const BROKEN_RS: &str = r"
+fn good() -> i32 { 1 }
+fn broken( :: :: :: {
+fn also_good() -> i32 { 2 }
+";
+
+    #[test]
+    fn partial_parse_still_extracts_what_parsed() {
+        let out = extract(&PathBuf::from("src/broken.rs"), BROKEN_RS);
+        assert!(out.partial_parse);
+        assert!(out.symbols.iter().any(|s| s.id.name == "good"));
+        assert!(out.symbols.iter().any(|s| s.id.name == "also_good"));
+    }
 }

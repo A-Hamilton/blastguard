@@ -558,4 +558,18 @@ export function outer() {
         let any_call = out.edges.iter().any(|e| e.kind == EdgeKind::Calls);
         assert!(!any_call, "module-scope arrow calls should be dropped; edges = {:?}", out.edges);
     }
+
+    const BROKEN_JS: &str = r"
+export function good() { return 1; }
+this is { not valid :: syntax
+export function alsoGood() { return 2; }
+";
+
+    #[test]
+    fn partial_parse_still_extracts_what_parsed() {
+        let out = extract(&PathBuf::from("src/broken.js"), BROKEN_JS);
+        assert!(out.partial_parse);
+        assert!(out.symbols.iter().any(|s| s.id.name == "good"));
+        assert!(out.symbols.iter().any(|s| s.id.name == "alsoGood"));
+    }
 }

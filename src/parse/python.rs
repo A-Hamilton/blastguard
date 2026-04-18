@@ -601,4 +601,24 @@ class Foo:
             "expected library='.' sentinel for bare relative import; got {:?}",
             out.library_imports);
     }
+
+    const BROKEN_PY: &str = r"
+def good():
+    return 1
+
+def broken(:
+    not valid
+    return 2
+
+def also_good():
+    return 3
+";
+
+    #[test]
+    fn partial_parse_still_extracts_what_parsed() {
+        let out = extract(&PathBuf::from("src/broken.py"), BROKEN_PY);
+        assert!(out.partial_parse);
+        assert!(out.symbols.iter().any(|s| s.id.name == "good"));
+        assert!(out.symbols.iter().any(|s| s.id.name == "also_good"));
+    }
 }
