@@ -15,8 +15,8 @@ try:
 except ImportError:  # pragma: no cover
     load_dataset = None  # type: ignore[assignment]
 
-SWE_BENCH_PRO_DATASET = "scaleai/swe-bench-pro"
-SWE_BENCH_PRO_SPLIT = "public"
+SWE_BENCH_PRO_DATASET = "ScaleAI/SWE-bench_Pro"
+SWE_BENCH_PRO_SPLIT = "test"
 
 
 @dataclass(frozen=True, slots=True)

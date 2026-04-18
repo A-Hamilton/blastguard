@@ -1,8 +1,16 @@
 # BlastGuard Benchmark Harness
 
-End-to-end SWE-bench Pro harness per SPEC §15. Runs the 731 public-set
-tasks with and without BlastGuard enabled, collects per-task metrics,
-and emits a comparison report.
+> **⚠️ NOT FAITHFUL YET.** This harness is a Plan 7 skeleton. Empirical
+> contact with the real dataset on 2026-04-18 exposed several gaps that
+> must be closed before it produces numbers comparable to the official
+> [SWE-bench Pro leaderboard](https://labs.scale.com/leaderboard/swe_bench_pro_public).
+> See [`KNOWN_GAPS.md`](KNOWN_GAPS.md) in this directory before running
+> anything.
+
+Planned end-to-end SWE-bench Pro harness per SPEC §15. The skeleton
+loads tasks, runs an agent loop, and emits per-task JSONL. What's
+missing: Docker-based grading via `jefzda/sweap-images`, multi-language
+test runners, and the full dataset schema mapping.
 
 ## Setup
 
