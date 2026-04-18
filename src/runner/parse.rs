@@ -228,32 +228,47 @@ fn first_line(s: &str) -> String {
 fn parse_stack(raw: &str) -> Vec<(PathBuf, u32)> {
     let mut out = Vec::new();
     for line in raw.lines() {
-        // Heuristic: look for "(FILE:LINE)" or "at FILE:LINE" or "at X (FILE:LINE)".
         let trimmed = line.trim();
-        // Extract content in parens first.
+        // Paren form: "at X (path:line[:col])"
         if let Some(open) = trimmed.rfind('(') {
             if let Some(close) = trimmed.rfind(')') {
                 if close > open {
                     let inner = &trimmed[open + 1..close];
-                    if let Some((file, line_str)) = inner.rsplit_once(':') {
-                        if let Ok(line_no) = line_str.parse::<u32>() {
-                            out.push((PathBuf::from(file), line_no));
-                            continue;
-                        }
+                    if let Some(frame) = parse_stack_frame(inner) {
+                        out.push(frame);
+                        continue;
                     }
                 }
             }
         }
-        // Fall back to "at FILE:LINE" trailing pattern.
+        // Bare form: "at path:line[:col]"
         if let Some(rest) = trimmed.strip_prefix("at ") {
-            if let Some((file, line_str)) = rest.rsplit_once(':') {
-                if let Ok(line_no) = line_str.parse::<u32>() {
-                    out.push((PathBuf::from(file), line_no));
-                }
+            if let Some(frame) = parse_stack_frame(rest) {
+                out.push(frame);
             }
         }
     }
     out
+}
+
+/// Parse a `path:line` or `path:line:col` fragment into `(PathBuf, line_no)`.
+/// Accepts up to two trailing colon-separated numeric segments.
+fn parse_stack_frame(frag: &str) -> Option<(PathBuf, u32)> {
+    let parts: Vec<&str> = frag.rsplitn(3, ':').collect();
+    // parts is reversed: [col_or_line, line_or_path, path] or [line, path]
+    match parts.len() {
+        3 => {
+            // frag was "path:line:col". parts = ["col", "line", "path"].
+            let line_no = parts[1].parse::<u32>().ok()?;
+            Some((PathBuf::from(parts[2]), line_no))
+        }
+        2 => {
+            // frag was "path:line". parts = ["line", "path"].
+            let line_no = parts[0].parse::<u32>().ok()?;
+            Some((PathBuf::from(parts[1]), line_no))
+        }
+        _ => None,
+    }
 }
 
 fn split_pytest_nodeid(nodeid: &str) -> (PathBuf, String) {
@@ -382,6 +397,26 @@ mod tests {
         assert!(!f.stack.is_empty());
         assert_eq!(f.stack[0].0, PathBuf::from("tests/test_handler.py"));
         assert_eq!(f.stack[0].1, 23);
+    }
+
+    #[test]
+    fn parse_stack_handles_path_line_col_format() {
+        let raw = "Error: boom\n    at processRequest (/tmp/handler.js:17:5)\n    at caller (/tmp/api.ts:42:3)";
+        let stack = parse_stack(raw);
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack[0].0, PathBuf::from("/tmp/handler.js"));
+        assert_eq!(stack[0].1, 17);
+        assert_eq!(stack[1].0, PathBuf::from("/tmp/api.ts"));
+        assert_eq!(stack[1].1, 42);
+    }
+
+    #[test]
+    fn parse_stack_handles_path_line_only_format() {
+        let raw = "    at /tmp/a.ts:10";
+        let stack = parse_stack(raw);
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].0, PathBuf::from("/tmp/a.ts"));
+        assert_eq!(stack[0].1, 10);
     }
 
     #[test]

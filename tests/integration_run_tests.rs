@@ -43,19 +43,17 @@ fn cargo_test_run_end_to_end() {
         Err(e) => {
             // `cargo test -- --format json` requires nightly (-Z
             // unstable-options). On stable the runner exits non-zero and
-            // our parser reads 0/0/0 counts. Early-return rather than
+            // Fix B surfaces TestCrashed. Early-return rather than
             // failing this opportunistic integration test.
-            eprintln!("run_tests err (skipping): {e:?}");
+            eprintln!("run_tests err (skipping on stable / cargo unavailable): {e:?}");
             return;
         }
     };
 
-    // If the runner ran but used stable without -Z support, we may still
-    // get non-zero parse counts from partial output. Accept either:
-    //  - 2 passed + 1 failed (nightly or --format=json supported), OR
-    //  - 0/0/0 with an early-return-friendly success (pragmatic).
+    // Stable toolchain: skip assertions on zero counts (shouldn't happen
+    // after Fix B, but defense in depth).
     if resp.passed + resp.failed + resp.skipped == 0 {
-        eprintln!("cargo produced no parseable JSON — likely stable toolchain without -Z; skipping assertions");
+        eprintln!("zero counts — skipping");
         return;
     }
 

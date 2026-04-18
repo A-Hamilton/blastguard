@@ -91,6 +91,19 @@ pub fn run_tests(
     let mut results = parse::parse(runner, &exec.stdout);
     results.duration_ms = u64::try_from(exec.duration.as_millis()).unwrap_or(u64::MAX);
 
+    // Detect crash: non-zero exit + zero parsed counts suggests the runner
+    // failed before producing usable output (e.g., cargo rejecting -Z
+    // unstable-options on stable, python missing pytest, etc.).
+    if exec.exit_code.is_some_and(|c| c != 0)
+        && results.passed == 0
+        && results.failed == 0
+        && results.skipped == 0
+    {
+        let stderr = String::from_utf8_lossy(&exec.stderr);
+        let truncated: String = stderr.chars().take(500).collect();
+        return Err(BlastGuardError::TestCrashed { stderr: truncated });
+    }
+
     let annotated = {
         let g = graph.lock().expect("graph lock poisoned");
         let s = session.lock().expect("session lock poisoned");
