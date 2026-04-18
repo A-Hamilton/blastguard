@@ -1,0 +1,37 @@
+{
+  "_comment": "Drop-in Claude Code settings for enabling BlastGuard routing hooks. Copy the relevant block into your project's .claude/settings.json (or user-scope ~/.claude/settings.json). All three hooks are safe to enable — they only emit additionalContext nudges and never deny the user's chosen tool.",
+  "_requirements": "jq must be on PATH. The hook scripts must be executable (chmod +x).",
+  "_hook_script_path_note": "Replace /ABSOLUTE/PATH/TO/blastguard below with the absolute path to the BlastGuard repo clone on your machine (or wherever you copied integrations/claude-code/hooks/ to).",
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABSOLUTE/PATH/TO/blastguard/integrations/claude-code/hooks/bg-pretool-grep.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABSOLUTE/PATH/TO/blastguard/integrations/claude-code/hooks/bg-pretool-bash.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABSOLUTE/PATH/TO/blastguard/integrations/claude-code/hooks/bg-pretool-edit.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -29,16 +29,42 @@ Requires Rust 1.82+.
 
 ## Use with Claude Code
 
+### 1. Register the MCP server
+
 ```bash
-claude mcp add blastguard -- /absolute/path/to/target/release/blastguard /absolute/path/to/your/project
+claude mcp add blastguard --scope project -- \
+    /absolute/path/to/target/release/blastguard \
+    /absolute/path/to/your/project
 ```
 
-A recommended line for the project's `CLAUDE.md`:
+### 2. Enable the full routing integration (recommended)
 
-> For multi-file changes where seeing blast radius matters, use BlastGuard's
-> `apply_change`. For trivial single-line fixes, your native edit tool is fine.
-> Use `search`'s structural patterns (`callers of X`, `outline of FILE`) before
-> falling back to grep.
+`integrations/claude-code/` ships a drop-in skill + three PreToolUse hooks
+that reinforce BlastGuard's tools during every session. See
+`integrations/claude-code/README.md` for install steps.
+
+- **Skill** auto-activates on trigger phrases ("callers of", "what imports",
+  "find X") and survives context compaction.
+- **Hooks** fire on every matching native tool call:
+  - `Grep` with a structural pattern (`fn `, `impl `, `class `, `import`) →
+    reminds the agent `blastguard__search` returns richer context.
+  - `Bash` with `rg`/`grep`/`ack` or a test-runner invocation → nudges toward
+    the relevant BlastGuard tool.
+  - `Edit` / `Write` on a source file → suggests `blastguard__apply_change`
+    for cascade awareness.
+
+All hooks `permissionDecision: "allow"` — they never block the user's chosen
+tool, only inject `additionalContext` for the next turn.
+
+### Honest positioning of the routing layer
+
+Per [CodeCompass (arXiv:2602.20048)](https://arxiv.org/abs/2602.20048), forced
+tool use actively hurts performance — agents ignore gated tools ~58% of the
+time and stall on error paths. BlastGuard's integration biases rather than
+forces. Expect ~40–60% of routine queries to still reach for native tools
+unless the user's phrasing makes structural intent obvious. The durable value
+is strongest on hard tasks: multi-file refactors, cascade analysis, test
+attribution after a batch of edits.
 
 ## Features
 

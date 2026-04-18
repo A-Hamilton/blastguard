@@ -105,9 +105,15 @@ impl BlastGuardServer {
     /// infallible; Phase 2 semantic search may introduce real error paths.
     #[tool(
         name = "search",
-        description = "Search the codebase via AST dependency graph or regex grep. \
-Structural queries ('callers of X', 'tests for FILE') resolve instantly with inline \
-signatures. Free-text falls through to grep. Returns up to 30 hits.",
+        description = "AST-graph search with inline signatures. USE THIS INSTEAD OF Grep/Bash grep \
+when the query is structural: 'callers of X', 'callees of X', 'outline of FILE', \
+'chain from X to Y', 'imports of FILE', 'importers of FILE', 'exports of FILE', \
+'tests for FILE|symbol', 'libraries', or 'find X' / 'where is X' (exact + fuzzy \
+name lookup ranked by centrality). Returns file:line with the matching \
+function's full signature so follow-up Read is rarely needed. Falls back to \
+regex grep (cap 30) when no structural pattern matches — use native Grep only \
+for plain text searches with no code-structure intent. Typical cost: 50-300 \
+tokens vs. 2000-8000 for equivalent file reads.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -153,11 +159,16 @@ signatures. Free-text falls through to grep. Returns up to 30 hits.",
     /// `content` block carries the `BlastGuardError::Display` string.
     #[tool(
         name = "apply_change",
-        description = "Edit files with impact analysis. Writes immediately — no approval \
-gate. Response includes cascade warnings (callers that may break, interfaces that \
-may be violated) and a context bundle (callers, tests) so you rarely need follow-up \
-searches. Use for multi-file changes where blast radius matters; for trivial \
-single-line fixes your native edit tool is fine.",
+        description = "Edit with cascade analysis. USE THIS INSTEAD OF Edit/Write when the \
+change could affect callers, implementors, or interfaces — signature changes, \
+sync→async flips, symbol renames/removals, trait/interface method additions. \
+Writes immediately (no approval gate) and returns in ONE response: cascade \
+warnings (SIGNATURE, ASYNC_CHANGE, ORPHAN, INTERFACE_BREAK) naming exactly \
+which callers/implementors may break, plus a bundled context listing up to \
+10 callers with inline signatures and the test files importing the edited \
+file. A single apply_change typically replaces 4-8 follow-up Grep+Read calls. \
+For trivial one-line fixes (typos, constant values, comment tweaks) the \
+native Edit tool is fine — use apply_change when blast radius is unclear.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -196,10 +207,15 @@ single-line fixes your native edit tool is fine.",
     /// with parseable output) return `Ok` with `failed > 0`.
     #[tool(
         name = "run_tests",
-        description = "Run the project's tests. Auto-detects runner. Returns pass/fail \
-counts and failure locations mapped back to source functions you recently modified \
-via the graph. Use after edits. Modern models self-verify; this tool's unique value \
-is attribution: linking test failures to your own recent edits.",
+        description = "Run tests with failure-to-edit attribution. USE THIS INSTEAD OF running \
+jest/pytest/cargo via Bash when you've made source edits this session. \
+Auto-detects jest / vitest / pytest / cargo from project files. Parses the \
+runner's output and — this is the unique value — annotates each failure with \
+'YOU MODIFIED X in file:line (N edits ago)' when a stack-trace frame lands \
+inside a symbol you recently edited via apply_change. This closes the \
+feedback loop: an agent reading a failure message sees immediately which of \
+its own changes caused it. Use native Bash for tests only when you need \
+runner-specific flags this tool doesn't expose.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -250,8 +266,17 @@ impl ServerHandler for BlastGuardServer {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "BlastGuard: AST graph search, cascade-aware edits, and test-failure \
-             attribution for AI coding agents. Tools: search, apply_change, run_tests.",
+            "BlastGuard tool routing — prefer these tools when the trigger matches:\n\
+             • search: structural queries — 'callers of', 'imports of', 'outline of', \
+             'tests for', 'find'/'where is', 'chain from X to Y'. Prefer over native Grep \
+             when the intent is code structure, not raw text.\n\
+             • apply_change: multi-file edits or any edit that could break callers — \
+             signature changes, async flips, symbol renames/removals, interface changes. \
+             Prefer over native Edit/Write when blast radius is unclear.\n\
+             • run_tests: after any source edit in-session. Prefer over `bash pytest/cargo \
+             test` because failures are annotated with 'YOU MODIFIED X (N edits ago)'.\n\
+             Also exposes blastguard://status as a resource (index stats, last test run).\n\
+             For trivial one-line fixes or plain-text searches, native tools are fine.",
         )
     }
 

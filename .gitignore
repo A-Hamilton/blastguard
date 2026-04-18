@@ -1,6 +1,17 @@
 /target
 Cargo.lock
 
+# BlastGuard cache (produced when binary runs against a project)
+/.blastguard/
+tests/fixtures/*/.blastguard/
+
+# Cargo long-type-overflow artifacts (cargo 1.90+ writes these on clippy pedantic runs)
+*.long-type-*.txt
+/rust_out
+
+# Log files
+*.log
+
 # Benchmark harness
 bench/results/*.jsonl
 bench/.venv/
