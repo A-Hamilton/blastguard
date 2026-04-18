@@ -8,6 +8,7 @@
 pub mod detect;
 pub mod execute;
 pub mod parse;
+pub mod request;
 
 use serde::{Deserialize, Serialize};
 
@@ -42,3 +43,5 @@ pub enum Runner {
     Pytest,
     CargoTest,
 }
+
+pub use request::{RunTestsRequest, RunTestsResponse};
