@@ -3,12 +3,13 @@
 //! Cold target: <3s for 10K files. Warm target: <500ms via BLAKE3 Merkle
 //! skip of unchanged subtrees.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
 use crate::graph::types::CodeGraph;
-use crate::parse::{detect_language, Language};
+use crate::parse::{detect_language, Language, ParseOutput};
 use crate::Result;
 
 /// Walk `project_root` respecting `.gitignore`, returning only files that
@@ -36,6 +37,11 @@ pub fn walk_project(project_root: &Path) -> Vec<PathBuf> {
 /// workers (each worker uses its own thread-local tree-sitter parser), and
 /// assembles a fresh [`CodeGraph`]. Target: under 3s for 10K files.
 ///
+/// Persists a cache after building the graph so that subsequent runs can use
+/// [`warm_start`] instead of re-parsing everything. Cache persistence failures
+/// are logged via `tracing::warn` rather than propagated — a failure here does
+/// not affect the returned graph.
+///
 /// # Errors
 /// Surfaces unreadable files as logged warnings rather than failing the whole
 /// index. A file that tree-sitter cannot parse at all is returned as
@@ -45,7 +51,7 @@ pub fn walk_project(project_root: &Path) -> Vec<PathBuf> {
 pub fn cold_index(project_root: &Path) -> Result<CodeGraph> {
     let files = walk_project(project_root);
 
-    let parses: Vec<crate::parse::ParseOutput> = files
+    let parses: Vec<ParseOutput> = files
         .par_iter()
         .filter_map(|path| match std::fs::read_to_string(path) {
             Ok(source) => {
@@ -79,19 +85,144 @@ pub fn cold_index(project_root: &Path) -> Result<CodeGraph> {
         }
         graph.library_imports.extend(out.library_imports);
     }
+
+    // Persist the fresh cache so the next run can warm-start. Best-effort:
+    // a write failure should not cause the caller's index to fail.
+    let mut file_hashes = HashMap::new();
+    for path in &files {
+        match crate::index::cache::hash_file(path) {
+            Ok(h) => {
+                file_hashes.insert(path.clone(), h);
+            }
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "hash_file failed during cache persist");
+            }
+        }
+    }
+    let mut tree_hashes = HashMap::new();
+    match crate::index::cache::hash_directory_tree(project_root) {
+        Ok(root_hash) => {
+            tree_hashes.insert(project_root.to_path_buf(), root_hash);
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "hash_directory_tree failed during cache persist");
+        }
+    }
+    let cache = crate::index::cache::CacheFile {
+        version: crate::index::cache::CACHE_VERSION,
+        file_hashes,
+        tree_hashes,
+        graph: graph.clone(),
+        tsconfig: None,
+    };
+    let cache_path = project_root.join(".blastguard").join("cache.bin");
+    if let Err(err) = crate::index::cache::save(&cache_path, &cache) {
+        tracing::warn!(error = %err, "failed to persist cache after cold index");
+    }
+
     Ok(graph)
 }
 
 /// Warm-start: load the cache, compute current hashes in parallel, skip
-/// unchanged subtrees via `tree_hashes`, reparse only changed files.
+/// unchanged files via BLAKE3 Merkle comparison, reparse only changed files.
+///
+/// # Fast path
+/// If the root directory Merkle hash matches the cached value, the entire
+/// project tree is unchanged and the cached graph is returned verbatim.
+///
+/// # Slow path
+/// Per-file hashes are compared to the cache. Changed files are dropped from
+/// the graph via [`CodeGraph::remove_file`] and then re-parsed. Deleted files
+/// are also dropped. The updated cache is persisted before returning.
+///
+/// # Fallback
+/// If no cache exists (first run after `cold_index` is skipped) or the cache
+/// is corrupt, falls through to [`cold_index`].
 ///
 /// # Errors
-/// Returns an error if the cache is corrupt (caller should fall back to
-/// [`cold_index`]).
+/// Returns an error if the cache is corrupt and unrecoverable, or if
+/// filesystem I/O fails during hashing.
 #[must_use = "warm start result should be used"]
-pub fn warm_start(_project_root: &Path) -> Result<CodeGraph> {
-    // TODO(phase-1.4): load cache, Merkle-diff, incremental reparse.
-    Ok(CodeGraph::new())
+pub fn warm_start(project_root: &Path) -> Result<CodeGraph> {
+    let cache_path = project_root.join(".blastguard").join("cache.bin");
+    let Some(cache) = crate::index::cache::load(&cache_path)? else {
+        return cold_index(project_root);
+    };
+
+    // Fast path: if the root directory Merkle hash matches, the entire tree
+    // is unchanged — skip file-level work entirely.
+    let current_root_hash = crate::index::cache::hash_directory_tree(project_root)?;
+    if cache.tree_hashes.get(project_root).copied() == Some(current_root_hash) {
+        return Ok(cache.graph);
+    }
+
+    // Slow path: walk the project, hash each current file, compare to the
+    // cached file_hashes map, reparse only files whose hashes differ.
+    let files = walk_project(project_root);
+    let mut graph = cache.graph;
+    let mut current_hashes: HashMap<PathBuf, u64> = HashMap::new();
+    let mut changed: Vec<PathBuf> = Vec::new();
+
+    for path in &files {
+        let h = crate::index::cache::hash_file(path)?;
+        current_hashes.insert(path.clone(), h);
+        if cache.file_hashes.get(path).copied() != Some(h) {
+            changed.push(path.clone());
+        }
+    }
+
+    // Drop stale file entries (deleted or renamed files no longer in walk).
+    for cached_path in cache.file_hashes.keys() {
+        if !current_hashes.contains_key(cached_path) {
+            graph.remove_file(cached_path);
+        }
+    }
+
+    // Drop changed files before reparsing so stale symbols are removed.
+    for path in &changed {
+        graph.remove_file(path);
+    }
+
+    let reparses: Vec<ParseOutput> = changed
+        .par_iter()
+        .filter_map(|path| {
+            let source = std::fs::read_to_string(path).ok()?;
+            let lang = detect_language(path)?;
+            let out = match lang {
+                Language::TypeScript => crate::parse::typescript::extract(path, &source),
+                Language::JavaScript => crate::parse::javascript::extract(path, &source),
+                Language::Python => crate::parse::python::extract(path, &source),
+                Language::Rust => crate::parse::rust::extract(path, &source),
+            };
+            Some(out)
+        })
+        .collect();
+
+    for out in reparses {
+        for sym in out.symbols {
+            graph.insert_symbol(sym);
+        }
+        for edge in out.edges {
+            graph.insert_edge(edge);
+        }
+        graph.library_imports.extend(out.library_imports);
+    }
+
+    // Persist the updated cache.
+    let mut tree_hashes = HashMap::new();
+    tree_hashes.insert(project_root.to_path_buf(), current_root_hash);
+    let fresh = crate::index::cache::CacheFile {
+        version: crate::index::cache::CACHE_VERSION,
+        file_hashes: current_hashes,
+        tree_hashes,
+        graph: graph.clone(),
+        tsconfig: cache.tsconfig,
+    };
+    if let Err(err) = crate::index::cache::save(&cache_path, &fresh) {
+        tracing::warn!(error = %err, "failed to persist updated cache after warm start");
+    }
+
+    Ok(graph)
 }
 
 #[cfg(test)]
@@ -230,5 +361,76 @@ mod tests {
     fn empty_project_returns_empty_vec() {
         let tmp = tempfile::tempdir().expect("tempdir");
         assert!(walk_project(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn cold_index_persists_cache_for_next_warm_start() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(tmp.path().join("src/a.ts"), "export function foo() {}").expect("write");
+
+        let _ = cold_index(tmp.path()).expect("cold_index");
+        let cache_path = tmp.path().join(".blastguard").join("cache.bin");
+        assert!(
+            cache_path.is_file(),
+            "cold_index should persist the cache at {}",
+            cache_path.display()
+        );
+    }
+
+    #[test]
+    fn warm_start_returns_cached_graph_when_tree_unchanged() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(tmp.path().join("src/a.ts"), "export function foo() {}").expect("write");
+
+        // Prime the cache.
+        let _ = cold_index(tmp.path()).expect("cold_index");
+
+        // Warm start — no files changed.
+        let graph = warm_start(tmp.path()).expect("warm_start");
+        assert!(
+            graph.symbols.keys().any(|id| id.name == "foo"),
+            "expected cached symbol to survive warm_start: {:?}",
+            graph.symbols.keys().map(|k| &k.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn warm_start_reparses_changed_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(tmp.path().join("src/a.ts"), "export function foo() {}").expect("write");
+
+        let _ = cold_index(tmp.path()).expect("cold_index");
+
+        // Modify the file.
+        std::fs::write(tmp.path().join("src/a.ts"), "export function bar() {}").expect("rewrite");
+
+        let graph = warm_start(tmp.path()).expect("warm_start");
+        assert!(
+            graph.symbols.keys().any(|id| id.name == "bar"),
+            "new symbol missing after warm_start reparse: {:?}",
+            graph.symbols.keys().map(|k| &k.name).collect::<Vec<_>>()
+        );
+        assert!(
+            !graph.symbols.keys().any(|id| id.name == "foo"),
+            "old symbol survived warm_start reparse: {:?}",
+            graph.symbols.keys().map(|k| &k.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn warm_start_without_cache_falls_back_to_cold_index() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(tmp.path().join("src/a.ts"), "export function foo() {}").expect("write");
+
+        // No cold_index first — cache is absent.
+        let graph = warm_start(tmp.path()).expect("warm_start");
+        assert!(
+            graph.symbols.keys().any(|id| id.name == "foo"),
+            "warm_start with no cache should fall back to cold_index"
+        );
     }
 }
