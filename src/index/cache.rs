@@ -29,8 +29,6 @@ pub struct TsConfigSnapshot {
     pub paths: HashMap<String, Vec<String>>,
 }
 
-// TODO(phase-1.4): load(path), save(path, &CacheFile).
-
 use std::io::Read;
 use std::path::Path;
 
@@ -123,6 +121,56 @@ pub fn hash_directory_tree(dir: &Path) -> Result<u64> {
     ))
 }
 
+/// Persist a `CacheFile` to disk using `rmp-serde`. Ensures the parent
+/// directory exists before writing.
+///
+/// # Errors
+/// Returns [`BlastGuardError::Io`] on filesystem failure and
+/// [`BlastGuardError::CacheCorrupt`] on serialisation failure.
+pub fn save(path: &Path, cache: &CacheFile) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| BlastGuardError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    let bytes = rmp_serde::to_vec(cache)
+        .map_err(|e| BlastGuardError::CacheCorrupt(e.to_string()))?;
+    std::fs::write(path, bytes).map_err(|source| BlastGuardError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Load a `CacheFile` from disk. Returns `Ok(None)` when the file is absent
+/// OR the stored version does not match [`CACHE_VERSION`] (the `BlastGuard`
+/// version was bumped; drop + rebuild).
+///
+/// # Errors
+/// Returns [`BlastGuardError::Io`] on read failure and
+/// [`BlastGuardError::CacheCorrupt`] on deserialisation failure.
+#[must_use = "a returned cache should be consumed or ignored explicitly"]
+pub fn load(path: &Path) -> Result<Option<CacheFile>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path).map_err(|source| BlastGuardError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let cache: CacheFile = rmp_serde::from_slice(&bytes)
+        .map_err(|e| BlastGuardError::CacheCorrupt(e.to_string()))?;
+    if cache.version != CACHE_VERSION {
+        tracing::info!(
+            stored = cache.version,
+            current = CACHE_VERSION,
+            "cache version mismatch — dropping and rebuilding"
+        );
+        return Ok(None);
+    }
+    Ok(Some(cache))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +254,62 @@ mod tests {
         let h1 = hash_directory_tree(tmp.path()).expect("hash");
         let h2 = hash_directory_tree(tmp.path()).expect("hash");
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn round_trip_cache_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cache_path = tmp.path().join(".blastguard").join("cache.bin");
+
+        let original = CacheFile {
+            version: CACHE_VERSION,
+            ..CacheFile::default()
+        };
+        save(&cache_path, &original).expect("save");
+        assert!(cache_path.is_file());
+
+        let loaded = load(&cache_path).expect("load ok").expect("present");
+        assert_eq!(loaded.version, CACHE_VERSION);
+    }
+
+    #[test]
+    fn missing_cache_returns_ok_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cache_path = tmp.path().join(".blastguard").join("cache.bin");
+        assert!(load(&cache_path).expect("no-err").is_none());
+    }
+
+    #[test]
+    fn version_mismatch_returns_ok_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cache_path = tmp.path().join("cache.bin");
+        let stale = CacheFile {
+            version: 0,
+            ..CacheFile::default()
+        };
+        save(&cache_path, &stale).expect("save");
+        let loaded = load(&cache_path).expect("no-err");
+        assert!(loaded.is_none(), "stale cache should be rejected; returned {loaded:?}");
+    }
+
+    #[test]
+    fn corrupt_cache_returns_err() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cache_path = tmp.path().join("cache.bin");
+        std::fs::create_dir_all(cache_path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&cache_path, b"not valid msgpack").expect("write");
+        let r = load(&cache_path);
+        assert!(r.is_err(), "corrupt cache should error; got {r:?}");
+    }
+
+    #[test]
+    fn save_creates_parent_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Non-existent .blastguard/ — save must create it.
+        let cache_path = tmp.path().join(".blastguard").join("cache.bin");
+        assert!(!cache_path.parent().expect("parent").exists());
+        save(&cache_path, &CacheFile { version: CACHE_VERSION, ..CacheFile::default() })
+            .expect("save creates dir");
+        assert!(cache_path.is_file());
     }
 }
