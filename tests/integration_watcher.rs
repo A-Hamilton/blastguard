@@ -1,5 +1,5 @@
 //! End-to-end: spawn the watcher against a tempdir, write a source file,
-//! poll the graph for the expected symbol. Uses the public spawn_watcher
+//! poll the graph for the expected symbol. Uses the public `spawn_watcher`
 //! API so we don't depend on `mcp::server::run`'s full boot.
 
 use std::sync::{Arc, Mutex};
