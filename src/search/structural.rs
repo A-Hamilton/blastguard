@@ -66,6 +66,21 @@ pub fn callees_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchH
         .collect()
 }
 
+/// `outline of FILE` — all symbols declared in `file`, sorted by `line_start`.
+#[must_use]
+pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
+    let Some(symbol_ids) = graph.file_symbols.get(file) else {
+        return Vec::new();
+    };
+    let mut hits: Vec<SearchHit> = symbol_ids
+        .iter()
+        .filter_map(|id| graph.symbols.get(id))
+        .map(SearchHit::structural)
+        .collect();
+    hits.sort_by_key(|h| h.line);
+    hits
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +104,12 @@ mod tests {
             is_async: false,
             embedding_id: None,
         }
+    }
+
+    fn sym_at(name: &str, file: &str, line: u32) -> Symbol {
+        let mut s = sym(name, file);
+        s.line_start = line;
+        s
     }
 
     fn insert_with_centrality(graph: &mut CodeGraph, s: Symbol, centrality: u32) {
@@ -233,5 +254,28 @@ mod tests {
         let files: Vec<_> = hits.iter().map(|h| h.file.clone()).collect();
         assert!(files.contains(&PathBuf::from("b.ts")));
         assert!(files.contains(&PathBuf::from("c.ts")));
+    }
+
+    #[test]
+    fn outline_of_returns_all_symbols_in_file_sorted_by_line() {
+        let mut g = CodeGraph::new();
+        let a = sym_at("a", "x.ts", 10);
+        let b = sym_at("b", "x.ts", 5);
+        let c = sym_at("c", "y.ts", 1);
+        for s in [a, b, c] {
+            g.insert_symbol(s);
+        }
+        let hits = outline_of(&g, std::path::Path::new("x.ts"));
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].line, 5);
+        assert_eq!(hits[1].line, 10);
+        assert!(hits.iter().all(|h| h.file == std::path::Path::new("x.ts")));
+    }
+
+    #[test]
+    fn outline_of_empty_when_no_file_symbols() {
+        let g = CodeGraph::new();
+        let hits = outline_of(&g, std::path::Path::new("nope.ts"));
+        assert!(hits.is_empty());
     }
 }
