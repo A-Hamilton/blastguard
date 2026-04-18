@@ -216,8 +216,14 @@ fn emit_simple(
 }
 
 /// Emit a [`LibraryImport`] for either an `import X` or `from X import Y`
-/// statement. `module_path` is the dotted name text (e.g. `"utils.auth"` or
-/// `"os.path"`). The `library` field is set to the first dotted segment.
+/// statement. `module_path` is the dotted name or relative import text
+/// (e.g. `"utils.auth"`, `"os.path"`, `"."`, `"..utils"`).
+///
+/// For relative imports (those beginning with `.`), leading dots are stripped
+/// before extracting the first segment:
+/// - `"."` or `".."` (no module name after the dots) → `library = "."` sentinel.
+///   Task 10 will resolve relative to the file's directory.
+/// - `"..utils"` → `library = "utils"` (first segment after stripping dots).
 ///
 /// Task 10 re-classifies entries whose first segment resolves to a project
 /// package as internal `Imports` edges.
@@ -230,14 +236,16 @@ fn emit_import(
     if module_path.is_empty() {
         return;
     }
-    let library = module_path
-        .split('.')
-        .next()
-        .unwrap_or(module_path)
-        .to_owned();
-    if library.is_empty() {
-        return;
-    }
+    // Strip leading dots for relative imports — the number of dots indicates
+    // how many parent packages to walk up. Task 10 resolves the full path.
+    let stripped = module_path.trim_start_matches('.');
+    let library = if stripped.is_empty() {
+        // `from . import foo` or `from .. import foo` — sibling/parent import
+        // with no module-name component.
+        ".".to_owned()
+    } else {
+        stripped.split('.').next().unwrap_or(stripped).to_owned()
+    };
     let line = u32::try_from(node.start_position().row)
         .unwrap_or(u32::MAX)
         .saturating_add(1);
@@ -337,13 +345,21 @@ fn enclosing_fn(
 }
 
 /// Return `true` if `node` (a `function_definition`) is a method — that is,
-/// its ancestor chain hits `class_definition` before `module`.
+/// its ancestor chain hits `class_definition` before `module` or another
+/// `function_definition`.
+///
+/// A `function_definition` encountered on the way up means the current node is
+/// a local function nested inside another function, not a class method — stop
+/// and return `false`.
 fn is_method(node: tree_sitter::Node<'_>) -> bool {
     let mut current = node;
     while let Some(parent) = current.parent() {
         match parent.kind() {
             "class_definition" => return true,
-            "module" => return false,
+            // `function_definition` means we are nested inside another function,
+            // not directly inside a class — stop and report not-a-method.
+            // `module` is the top-level sentinel.
+            "function_definition" | "module" => return false,
             _ => {}
         }
         current = parent;
@@ -530,5 +546,59 @@ class Foo:
         assert_eq!(calls.len(), 1, "got {calls:?}");
         assert_eq!(calls[0].from.name, "wrapper");
         assert_eq!(calls[0].to.name, "helper");
+    }
+
+    // --- Fix A regression tests ---
+
+    #[test]
+    fn nested_function_inside_method_is_not_a_method() {
+        let src = "class C:\n    def m(self):\n        def inner():\n            pass\n";
+        let out = extract(&PathBuf::from("src/a.py"), src);
+        let inner = out.symbols.iter().find(|s| s.id.name == "inner")
+            .expect("inner missing");
+        assert_eq!(inner.id.kind, SymbolKind::Function,
+            "nested local function should be Function, not Method");
+        // m itself is still a method
+        let m = out.symbols.iter().find(|s| s.id.name == "m")
+            .expect("m missing");
+        assert_eq!(m.id.kind, SymbolKind::Method);
+    }
+
+    #[test]
+    fn call_inside_nested_function_attributes_to_inner_not_outer_method() {
+        let src = "class C:\n    def m(self):\n        def inner():\n            helper()\n";
+        let out = extract(&PathBuf::from("src/a.py"), src);
+        let has_call = out.edges.iter().any(|e|
+            e.kind == EdgeKind::Calls
+                && e.from.name == "inner"
+                && e.to.name == "helper"
+        );
+        assert!(has_call, "call inside inner() should attribute to inner; edges = {:?}", out.edges);
+        // Verify the wrong attribution does NOT happen
+        let wrong = out.edges.iter().any(|e|
+            e.kind == EdgeKind::Calls
+                && e.from.name == "m"
+                && e.to.name == "helper"
+        );
+        assert!(!wrong, "call should NOT attribute to outer method m");
+    }
+
+    // --- Fix B regression tests ---
+
+    #[test]
+    fn dotted_relative_import_captured_with_stripped_library() {
+        let src = "from ..utils import verify\n";
+        let out = extract(&PathBuf::from("src/a.py"), src);
+        assert!(out.library_imports.iter().any(|li| li.library == "utils"),
+            "expected library='utils' (dots stripped); got {:?}", out.library_imports);
+    }
+
+    #[test]
+    fn bare_relative_import_uses_dot_sentinel() {
+        let src = "from . import foo\n";
+        let out = extract(&PathBuf::from("src/a.py"), src);
+        assert!(out.library_imports.iter().any(|li| li.library == "."),
+            "expected library='.' sentinel for bare relative import; got {:?}",
+            out.library_imports);
     }
 }

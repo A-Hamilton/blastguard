@@ -10,9 +10,12 @@
 (import_statement
   name: (dotted_name) @import.module) @import.simple
 
-; from utils.auth import verify
+; from utils.auth import verify  (absolute)
+; from . import foo              (bare relative)
+; from ..utils import bar        (relative with module)
 (import_from_statement
-  module_name: (dotted_name) @import.from) @import.from_decl
+  module_name: [(dotted_name) @import.from
+                (relative_import) @import.from]) @import.from_decl
 
 ; Calls — bare identifier or attribute.identifier (obj.method())
 (call
