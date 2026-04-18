@@ -65,12 +65,32 @@ pub fn apply_edit(path: &Path, old_text: &str, new_text: &str) -> Result<()> {
                 source,
             })
         }
-        n => Err(BlastGuardError::AmbiguousEdit {
-            path: path.to_path_buf(),
-            count: n,
-            lines: Vec::new(),
-        }),
+        n => {
+            let lines = find_match_lines(&body, old_text);
+            Err(BlastGuardError::AmbiguousEdit {
+                path: path.to_path_buf(),
+                count: n,
+                lines,
+            })
+        }
     }
+}
+
+/// Enumerate 1-based line numbers where `needle` appears in `body`.
+/// Multi-line needles count once per starting line.
+fn find_match_lines(body: &str, needle: &str) -> Vec<u32> {
+    let mut lines = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(found) = body[cursor..].find(needle) {
+        let offset = cursor + found;
+        let line = body[..offset].chars().filter(|&c| c == '\n').count();
+        let line_1based = u32::try_from(line)
+            .unwrap_or(u32::MAX)
+            .saturating_add(1);
+        lines.push(line_1based);
+        cursor = offset + needle.len().max(1);
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -115,6 +135,21 @@ mod tests {
         let err = apply_edit(std::path::Path::new("/nope/does/not/exist"), "x", "y")
             .expect_err("should error");
         assert!(matches!(err, BlastGuardError::Io { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn ambiguous_edit_lists_all_match_line_numbers() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("a.ts");
+        std::fs::write(&path, "a = 1\nb = 1\nc = 1\n").expect("write");
+        let err = apply_edit(&path, "= 1", "= 2").expect_err("ambiguous");
+        match err {
+            BlastGuardError::AmbiguousEdit { count, lines, .. } => {
+                assert_eq!(count, 3);
+                assert_eq!(lines, vec![1, 2, 3]);
+            }
+            e => panic!("wrong variant: {e:?}"),
+        }
     }
 
     #[test]
