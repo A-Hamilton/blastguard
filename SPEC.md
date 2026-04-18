@@ -2,12 +2,12 @@
 
 ## 1. Philosophy
 
-BlastGuard is an open-source Rust MCP server designed to lift AI coding agents on SWE-bench Pro through three mechanisms validated in peer-reviewed research: AST-based retrieval (cAST paper: +2.67 Pass@1), semantic search via embeddings (Auggie: +6 over baseline), and tight test-to-code feedback loops (Replay.io: +15 on debugging tasks). It does not force tool use or gate edits. It offers richer alternatives that agents choose when tasks are complex enough to benefit.
+BlastGuard is an open-source Rust MCP server designed to lift AI coding agents on SWE-bench Pro through three mechanisms validated in peer-reviewed and independent-vendor research: AST-based retrieval (cAST paper: up to +2.7 Pass@1 on SWE-bench Lite/Verified — arXiv:2506.15655), semantic search via embeddings (Auggie: +5.9 over the SWE-Agent Scale-AI scaffold on SWE-bench Pro), and tight test-to-code feedback loops (Replay.io: +15 on their own Web Debug Bench — not SWE-bench). Independent corroboration: CodeCompass (arXiv:2602.20048) showed +20pp on hidden-dependency tasks and 0pp on semantic tasks, exactly matching the split BlastGuard's graph-first design predicts. It does not force tool use or gate edits. It offers richer alternatives that agents choose when tasks are complex enough to benefit.
 
-Three documented failure modes drive the design:
+Three documented failure modes drive the design (SWE-bench Pro paper §6.3, profiling Sonnet 4 on the Scale SEAL scaffold):
 
-- **Context overflow** — 35% of Sonnet 4 failures. Solved by compact graph queries (50-300 tokens) instead of file reads (2000-8000 tokens).
-- **Multi-file cascade errors** — SWE-bench Pro averages 4.1 files per task. A signature change in file A silently breaks callers in files B, C, D. Solved by warnings in edit responses that list affected callers.
+- **Endless file reading / context overflow** — 62.6% of tasks exhibit endless file reading; narrative attributes ~35.6% of failures to long-context overflow (Table 4 reports 8.7% as a pure token-limit category; the delta is scope-of-analysis). Solved by compact graph queries (50-300 tokens) instead of raw file reads (2000-8000 tokens).
+- **Multi-file cascade errors** — SWE-bench Pro averages 4.1 files per reference patch (paper §3). A signature change in file A silently breaks callers in files B, C, D. Solved by warnings in edit responses that list affected callers.
 - **Blind iteration on test failures** — Agents often don't know which of their edits caused a test to fail. Solved by mapping stack traces to recently modified functions via the graph.
 
 This spec is MVP-first. Phase 1 ships the core three tools with minimal feature set. Phase 2 adds semantic embeddings and bundled retrieval only if Phase 1 benchmark data supports the effort. Phase 3 is data-driven iteration.
@@ -461,18 +461,19 @@ Runs in dedicated Tokio task, updates graph under write lock.
 
 ```toml
 [dependencies]
-rmcp = { version = "0.16", features = ["server", "transport-io", "macros"] }
-schemars = "0.8"
+# Verified against crates.io on 2026-04-18 via context7 MCP.
+rmcp = { version = "1.5", features = ["server", "transport-io", "macros", "schemars"] }
+schemars = "0.9"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tree-sitter = "0.24"
+tree-sitter = "0.24"                 # 0.26.x available; hold unless grammar regressions surface
 tree-sitter-typescript = "0.23"
 tree-sitter-javascript = "0.23"
 tree-sitter-python = "0.23"
-tree-sitter-rust = "0.24"
-notify = "7"
-notify-debouncer-mini = "0.5"
+tree-sitter-rust = "0.21"               # 0.22+ emits ABI 15; tree-sitter 0.24 accepts max ABI 14 — upgrade tree-sitter core to 0.26+ (post-MVP) to use 0.24.
+notify = "8"
+notify-debouncer-mini = "0.7"        # must track notify major version
 ignore = "0.4"
 regex = "1"
 rayon = "1.10"
@@ -490,7 +491,7 @@ toml = "0.8"
 # Phase 2 additions (feature-flagged)
 sqlite-vec = { version = "0.1", optional = true }
 rusqlite = { version = "0.32", optional = true }
-fastembed = { version = "4", optional = true }
+fastembed = { version = "5", optional = true }    # v5 Candle backend; ONNX path still supported
 
 [features]
 default = []
@@ -615,10 +616,22 @@ Every tool call records: tool name, input size, output size, wall time. Every ca
 
 Ship in README.md with full methodology, confidence intervals, and trajectories. Compare against:
 - Baseline (no BlastGuard, same scaffold)
-- code-graph-mcp (closest open-source competitor)
-- WarpGrep v2 (if published harness available)
+- code-graph-mcp (closest open-source competitor — Rust + BLAKE3 Merkle; no published SWE-bench number as of 2026-04-18)
+- WarpGrep v2 (Morph, self-reported +2.1pt on Opus 4.6, +3.7pt on MiniMax 2.5 on SWE-bench Pro)
+- Auggie (Augment Code, self-reported +5.9 over SWE-Agent Scale-AI scaffold on SWE-bench Pro)
 
 Be honest. If BlastGuard shows 0 or negative lift, publish that. If +1pt with ±2 confidence interval, say so. The goal is evidence, not marketing.
+
+### 15.4 Grading isolation (Berkeley BenchJack defense)
+
+UC Berkeley RDI published a benchmark-exploit paper (April 2026) showing SWE-bench tasks can be trivially gamed by an agent writing a 10-line `conftest.py` that forces pytest to report all tests as passing — 45 confirmed exploits across 8 benchmarks. The BlastGuard harness MUST:
+
+- Run grading in a separate process/container with its own pristine pytest config.
+- Ignore any `conftest.py`, `pytest.ini`, or `pyproject.toml` overrides the agent creates inside the task directory during grading.
+- Diff agent-touched files before grading; flag any `.git`, `conftest.py`, or CI config modifications as a tampering failure (counts as unresolved).
+- Never execute arbitrary agent-written Python in the grader's process.
+
+This is a non-negotiable requirement. Without it, our own benchmark numbers cannot be trusted.
 
 ---
 

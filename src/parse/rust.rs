@@ -141,16 +141,9 @@ fn emit_function(
         .map(|n| n.utf8_text(src_bytes).unwrap_or("").to_owned())
         .unwrap_or_default();
 
-    // Rust return type field is prefixed with `->`, e.g. `-> Result<(), Error>`.
     let return_type = node
         .child_by_field_name("return_type")
-        .map(|n| {
-            n.utf8_text(src_bytes)
-                .unwrap_or("")
-                .trim_start_matches("->")
-                .trim()
-                .to_owned()
-        });
+        .map(|n| n.utf8_text(src_bytes).unwrap_or("").trim().to_owned());
 
     let signature = render_signature(&name, &params_text, return_type.as_deref());
     let body_text = node.utf8_text(src_bytes).unwrap_or("");
@@ -577,5 +570,65 @@ fn private_helper() {
             })
             .collect();
         assert_eq!(calls.len(), 1, "expected 1 dedup'd edge, got {calls:?}");
+    }
+
+    #[test]
+    fn scoped_identifier_call_emits_edge_with_final_name() {
+        let src = "fn build() -> Vec<u8> { Vec::new() }";
+        let out = extract(&PathBuf::from("src/a.rs"), src);
+        let has_call = out.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls && e.from.name == "build" && e.to.name == "new"
+        });
+        assert!(
+            has_call,
+            "expected build -> new edge for Vec::new(); edges = {:?}",
+            out.edges
+        );
+    }
+
+    #[test]
+    fn nested_scoped_identifier_call_captures_final_segment() {
+        let src = "fn x() { crate::utils::helper(); }";
+        let out = extract(&PathBuf::from("src/a.rs"), src);
+        let has_call = out.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls && e.from.name == "x" && e.to.name == "helper"
+        });
+        assert!(
+            has_call,
+            "expected x -> helper edge for crate::utils::helper(); edges = {:?}",
+            out.edges
+        );
+    }
+
+    #[test]
+    fn nested_fn_inside_impl_is_function_not_method() {
+        let src = "impl Foo { fn outer(&self) { fn inner() {} } }";
+        let out = extract(&PathBuf::from("src/x.rs"), src);
+        assert!(
+            out.symbols
+                .iter()
+                .any(|s| s.id.name == "inner" && s.id.kind == SymbolKind::Function),
+            "inner should be Function, got symbols: {:?}",
+            out.symbols
+                .iter()
+                .map(|s| (&s.id.name, s.id.kind))
+                .collect::<Vec<_>>()
+        );
+        assert!(out
+            .symbols
+            .iter()
+            .any(|s| s.id.name == "outer" && s.id.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn pub_super_maps_to_public_visibility() {
+        let src = "pub(super) fn helper() {}";
+        let out = extract(&PathBuf::from("src/x.rs"), src);
+        let sym = out
+            .symbols
+            .iter()
+            .find(|s| s.id.name == "helper")
+            .expect("helper missing");
+        assert_eq!(sym.visibility, Visibility::Public);
     }
 }

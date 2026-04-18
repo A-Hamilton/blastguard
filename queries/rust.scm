@@ -18,8 +18,8 @@
 (use_declaration
   argument: (_) @use.path) @use.decl
 
-; Calls — identifier, field access, or scoped path.
+; Calls — identifier, field access, or scoped path (final name segment).
 (call_expression
   function: [(identifier) @call.callee
              (field_expression field: (field_identifier) @call.callee)
-             (scoped_identifier)]) @call.site
+             (scoped_identifier name: (identifier) @call.callee)]) @call.site

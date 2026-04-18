@@ -12,7 +12,7 @@ use crate::graph::types::CodeGraph;
 
 /// Bump when the serialised schema changes in an incompatible way.
 /// Drop + rebuild on mismatch (SPEC §9).
-pub const CACHE_VERSION: u32 = 2;
+pub const CACHE_VERSION: u32 = 3; // bump: SymbolKind::Enum added in Phase 1.2 Rust driver.
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CacheFile {
