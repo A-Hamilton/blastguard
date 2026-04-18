@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::edit::request::BundledContext;
 use crate::graph::types::{CodeGraph, Symbol};
-use crate::search::structural::{callers_of, tests_for};
+use crate::search::structural::{callers_of_id, tests_for};
 
 /// Build the bundled context for a set of changed symbols in `file`.
 /// - `callers`: up to 5 per changed symbol, capped at 10 total.
@@ -18,7 +18,7 @@ pub fn build(graph: &CodeGraph, file: &Path, changed: &[Symbol]) -> BundledConte
     let total_cap: usize = 10;
 
     'outer: for sym in changed {
-        let hits = callers_of(graph, &sym.id.name, per_symbol_cap);
+        let hits = callers_of_id(graph, &sym.id, per_symbol_cap);
         for hit in hits {
             let line_str = match hit.signature.as_deref() {
                 Some(sig) => format!("{}:{} — {}", hit.file.display(), hit.line, sig),

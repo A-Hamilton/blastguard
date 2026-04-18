@@ -20,10 +20,32 @@ pub fn find(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
         .collect()
 }
 
-// TODO(plan-3): introduce callers_of_id / tests_for_id / importers_of_id
-// helpers that take a pre-resolved &SymbolId. Plan 3's apply_change will
-// already hold the exact id of the symbol it just wrote; re-resolving by
-// name risks false positives on name collisions.
+/// Caller lookup by pre-resolved [`SymbolId`]. Used by Plan 3's
+/// `apply_change` bundled context so the orchestrator can feed the exact
+/// edited symbol rather than re-resolving by name (which risks picking a
+/// different same-named symbol).
+#[must_use]
+pub fn callers_of_id(graph: &CodeGraph, id: &SymbolId, max_hits: usize) -> Vec<SearchHit> {
+    let mut caller_ids: Vec<&SymbolId> = callers(graph, id);
+    // Fallback to (file, name) match to catch Phase 1.2 driver placeholders
+    // where call edges have to.kind=Function regardless of the callee's
+    // actual kind. Same pattern as impact::find_callers_by_name.
+    if caller_ids.is_empty() {
+        caller_ids = graph
+            .reverse_edges
+            .iter()
+            .filter(|(to_id, _)| to_id.file == id.file && to_id.name == id.name)
+            .flat_map(|(_, edges)| edges.iter().map(|e| &e.from))
+            .collect();
+    }
+    sort_by_centrality(graph, &mut caller_ids);
+    caller_ids
+        .into_iter()
+        .take(max_hits)
+        .filter_map(|cid| graph.symbols.get(cid))
+        .map(SearchHit::structural)
+        .collect()
+}
 
 /// `callers of X` / `what calls X` — reverse BFS (1 hop) with inline signatures.
 ///

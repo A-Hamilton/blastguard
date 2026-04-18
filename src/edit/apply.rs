@@ -132,6 +132,18 @@ pub fn orchestrate(
 
     // Fast-path: create_file — write the file fresh and reparse.
     if request.create_file {
+        if request.file.exists() {
+            return Err(BlastGuardError::Io {
+                path: request.file.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "create_file=true but {} already exists",
+                        request.file.display()
+                    ),
+                ),
+            });
+        }
         if let Some(parent) = request.file.parent() {
             std::fs::create_dir_all(parent).map_err(|source| BlastGuardError::Io {
                 path: parent.to_path_buf(),
@@ -202,8 +214,19 @@ pub fn orchestrate(
     };
 
     // 2. Apply each change to disk.
+    // Snapshot the file so we can roll back if any change fails part-way.
+    // `create_file: true` short-circuits above, so we know the file exists
+    // here (or does not, and the first apply_edit will surface an Io error).
+    let rollback_source: Option<String> = std::fs::read_to_string(&file).ok();
+
     for change in &request.changes {
-        apply_edit(&file, &change.old_text, &change.new_text)?;
+        if let Err(err) = apply_edit(&file, &change.old_text, &change.new_text) {
+            // Roll back any partial writes.
+            if let Some(original) = rollback_source {
+                let _ = std::fs::write(&file, original);
+            }
+            return Err(err);
+        }
     }
 
     // 3. Reparse — if the language is not supported, edit landed but graph is unaffected.
@@ -432,6 +455,71 @@ mod flag_tests {
         assert!(file.is_file(), "file should exist");
         let content = std::fs::read_to_string(&file).expect("read");
         assert!(content.contains("fresh"));
+    }
+
+    #[test]
+    fn multi_change_rolls_back_on_later_failure() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("src/a.ts");
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&file, "one\ntwo\nthree\n").expect("write");
+
+        let graph = Mutex::new(CodeGraph::new());
+        let session = Mutex::new(SessionState::new());
+
+        let req = ApplyChangeRequest {
+            file: file.clone(),
+            changes: vec![
+                Change { old_text: "one".to_string(), new_text: "ONE".to_string() },
+                Change { old_text: "NOT_PRESENT".to_string(), new_text: "x".to_string() },
+            ],
+            create_file: false,
+            delete_file: false,
+        };
+
+        let err = orchestrate(&graph, &session, tmp.path(), &req).expect_err("should fail");
+        assert!(
+            matches!(err, crate::error::BlastGuardError::EditNotFound { .. }),
+            "expected EditNotFound, got {err:?}"
+        );
+
+        let after = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(
+            after,
+            "one\ntwo\nthree\n",
+            "file must be rolled back to original on partial-change failure"
+        );
+    }
+
+    #[test]
+    fn create_file_refuses_to_overwrite_existing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("src/existing.ts");
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&file, "pre-existing content").expect("write");
+
+        let graph = Mutex::new(CodeGraph::new());
+        let session = Mutex::new(SessionState::new());
+
+        let req = ApplyChangeRequest {
+            file: file.clone(),
+            changes: vec![Change {
+                old_text: String::new(),
+                new_text: "overwrite attempt".to_string(),
+            }],
+            create_file: true,
+            delete_file: false,
+        };
+
+        let err = orchestrate(&graph, &session, tmp.path(), &req).expect_err("should refuse");
+        assert!(
+            matches!(err, crate::error::BlastGuardError::Io { .. }),
+            "expected Io, got {err:?}"
+        );
+
+        // Original content preserved.
+        let after = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(after, "pre-existing content");
     }
 
     #[test]
