@@ -13,6 +13,28 @@ use std::path::Path;
 
 use crate::error::{BlastGuardError, Result};
 
+/// Scan `body` for the line with the highest normalised-Levenshtein
+/// similarity to `needle`. Returns `(line_number_1_based, similarity_0_to_1, fragment)`.
+fn closest_line(body: &str, needle: &str) -> (u32, f32, String) {
+    let mut best_line: u32 = 0;
+    let mut best_sim: f32 = 0.0;
+    let mut best_fragment = String::new();
+    for (idx, line) in body.lines().enumerate() {
+        let dist = strsim::levenshtein(line, needle);
+        let max_len = line.len().max(needle.len()).max(1);
+        #[allow(clippy::cast_precision_loss)]
+        let sim = 1.0_f32 - (dist as f32 / max_len as f32);
+        if sim > best_sim {
+            best_sim = sim;
+            best_line = u32::try_from(idx)
+                .unwrap_or(u32::MAX)
+                .saturating_add(1);
+            best_fragment = line.to_string();
+        }
+    }
+    (best_line, best_sim, best_fragment)
+}
+
 /// Replace the single occurrence of `old_text` with `new_text` in `path`.
 ///
 /// # Errors
@@ -27,12 +49,15 @@ pub fn apply_edit(path: &Path, old_text: &str, new_text: &str) -> Result<()> {
 
     let occurrences = body.matches(old_text).count();
     match occurrences {
-        0 => Err(BlastGuardError::EditNotFound {
-            path: path.to_path_buf(),
-            line: 0,
-            similarity: 0.0,
-            fragment: String::new(),
-        }),
+        0 => {
+            let (line, similarity, fragment) = closest_line(&body, old_text);
+            Err(BlastGuardError::EditNotFound {
+                path: path.to_path_buf(),
+                line,
+                similarity,
+                fragment,
+            })
+        }
         1 => {
             let updated = body.replacen(old_text, new_text, 1);
             std::fs::write(path, updated).map_err(|source| BlastGuardError::Io {
@@ -90,5 +115,26 @@ mod tests {
         let err = apply_edit(std::path::Path::new("/nope/does/not/exist"), "x", "y")
             .expect_err("should error");
         assert!(matches!(err, BlastGuardError::Io { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn edit_not_found_carries_closest_match_and_similarity() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("a.ts");
+        std::fs::write(
+            &path,
+            "function processRequest(req) {\n    return handler(req);\n}\n",
+        ).expect("write");
+        // Caller provided the function header without the parameter.
+        let err = apply_edit(&path, "function processRequest() {", "function x() {")
+            .expect_err("not found");
+        match err {
+            BlastGuardError::EditNotFound { line, similarity, fragment, .. } => {
+                assert_eq!(line, 1, "closest line should be the function header");
+                assert!(similarity >= 0.7, "similarity {similarity} too low for a near-miss");
+                assert!(fragment.contains("processRequest"), "fragment = {fragment}");
+            }
+            e => panic!("wrong variant: {e:?}"),
+        }
     }
 }
