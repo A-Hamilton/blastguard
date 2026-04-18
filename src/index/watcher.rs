@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use ignore::gitignore::Gitignore;
@@ -49,24 +50,41 @@ pub fn spawn_watcher(
         .watch(&project_root, RecursiveMode::Recursive)
         .map_err(|e| std::io::Error::other(format!("watch {}: {e}", project_root.display())))?;
 
+    // Fix C: load gitignore once here rather than on every handle_event call.
+    let gitignore = load_gitignore(&project_root);
+
     // Relay thread: forwards debounced events from std mpsc → tokio channel.
     // Runs on a std thread (not tokio) because `std_rx.recv()` is blocking.
+    // Fix B: poll with a timeout so the thread exits within one tick after the
+    // tokio task is aborted (relay_tx.is_closed() becomes true).
     let relay_tx = tokio_tx;
     std::thread::Builder::new()
         .name("blastguard-watcher-relay".to_string())
         .spawn(move || {
             // Keep debouncer alive for the duration of the relay thread.
             let _keep_alive = debouncer;
-            for result in std_rx {
-                match result {
-                    Ok(events) if !events.is_empty() => {
-                        // Ignore send errors — tokio task has exited, shutdown in progress.
-                        let _ = relay_tx.send(events);
+            loop {
+                match std_rx.recv_timeout(Duration::from_millis(200)) {
+                    Ok(result) => {
+                        match result {
+                            Ok(events) if !events.is_empty() => {
+                                if relay_tx.send(events).is_err() {
+                                    // tokio receiver dropped — shut down cleanly.
+                                    break;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!(error = %e, "watcher: notify error");
+                            }
+                        }
                     }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!(error = %e, "watcher: notify error");
+                    Err(RecvTimeoutError::Timeout) => {
+                        if relay_tx.is_closed() {
+                            break;
+                        }
                     }
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
         })
@@ -75,7 +93,7 @@ pub fn spawn_watcher(
     let handle = tokio::spawn(async move {
         while let Some(events) = tokio_rx.recv().await {
             for event in events {
-                handle_event(&event, &project_root, &graph);
+                handle_event(&event, &project_root, &graph, &gitignore);
             }
         }
     });
@@ -112,16 +130,28 @@ pub(crate) fn load_gitignore(project_root: &Path) -> Gitignore {
     gi
 }
 
-fn handle_event(event: &DebouncedEvent, project_root: &Path, graph: &Arc<Mutex<CodeGraph>>) {
-    let gi = load_gitignore(project_root);
+fn handle_event(
+    event: &DebouncedEvent,
+    project_root: &Path,
+    graph: &Arc<Mutex<CodeGraph>>,
+    gitignore: &Gitignore,
+) {
+    // Fix C: gitignore is pre-loaded by the caller — no filesystem read here.
     let path = &event.path;
-    if !is_relevant(path, project_root, &gi) {
+    if !is_relevant(path, project_root, gitignore) {
         return;
     }
 
     if !path.exists() {
         // File was deleted — drop its entries from the graph.
-        let mut g = graph.lock().expect("graph lock poisoned");
+        // Fix A: degrade gracefully if the lock is poisoned instead of panicking.
+        let Ok(mut g) = graph.lock() else {
+            tracing::error!(
+                path = %path.display(),
+                "watcher: graph lock poisoned, skipping reindex"
+            );
+            return;
+        };
         g.remove_file(path);
         tracing::debug!(path = %path.display(), "watcher: dropped deleted file");
         return;
@@ -142,7 +172,14 @@ fn handle_event(event: &DebouncedEvent, project_root: &Path, graph: &Arc<Mutex<C
         Language::Rust => crate::parse::rust::extract(path, &source),
     };
 
-    let mut g = graph.lock().expect("graph lock poisoned");
+    // Fix A: degrade gracefully if the lock is poisoned instead of panicking.
+    let Ok(mut g) = graph.lock() else {
+        tracing::error!(
+            path = %path.display(),
+            "watcher: graph lock poisoned, skipping reindex"
+        );
+        return;
+    };
     g.remove_file(path);
     for sym in parsed.symbols {
         g.insert_symbol(sym);
@@ -186,7 +223,7 @@ mod tests {
             path: file.clone(),
             kind: DebouncedEventKind::Any,
         };
-        handle_event(&event, tmp.path(), &graph);
+        handle_event(&event, tmp.path(), &graph, &Gitignore::empty());
 
         let g = graph.lock().expect("lock");
         assert!(
@@ -217,13 +254,35 @@ mod tests {
             path: file.clone(),
             kind: DebouncedEventKind::Any,
         };
-        handle_event(&event, tmp.path(), &graph);
+        handle_event(&event, tmp.path(), &graph, &Gitignore::empty());
 
         let g = graph.lock().expect("lock");
         assert!(
             !g.symbols.keys().any(|id| id.name == "doomed"),
             "doomed should be gone"
         );
+    }
+
+    /// Exercises the relay-thread shutdown path introduced in Fix B.
+    ///
+    /// After the tokio task is aborted, the relay thread polls `std_rx` with a
+    /// 200ms timeout and checks `relay_tx.is_closed()`. Within one poll cycle
+    /// (≤200ms + a small margin) it should exit. This test doesn't assert the
+    /// OS thread is gone (thread introspection is platform-specific) but it
+    /// exercises the code path at runtime and documents the expected behaviour.
+    #[tokio::test]
+    async fn relay_thread_exits_when_tokio_task_aborted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let graph = Arc::new(Mutex::new(CodeGraph::new()));
+        let handle = spawn_watcher(tmp.path().to_path_buf(), Arc::clone(&graph))
+            .expect("spawn");
+
+        // Abort the task; the relay thread should notice relay_tx is closed
+        // within the 200ms poll timeout and exit cleanly.
+        handle.abort();
+        let _ = handle.await;
+        // 300ms > 200ms timeout, so one full poll cycle has elapsed.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
 }
 
