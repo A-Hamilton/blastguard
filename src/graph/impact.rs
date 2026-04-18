@@ -4,12 +4,13 @@
 //! `INTERFACE_BREAK`. Each fires from a single structural check; the aim is
 //! high signal, not exhaustiveness (SPEC §5.2: agents ignore noisy output).
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::graph::types::SymbolId;
 
 /// Cascade warning kind. Serialised as an uppercase tag in the MCP response.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum WarningKind {
     Signature,
@@ -32,7 +33,7 @@ impl WarningKind {
 
 /// A single rendered cascade warning. Body is capped at 200 chars by
 /// [`Warning::clamp`] to respect the SPEC §5.4 output budget.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Warning {
     pub kind: WarningKind,
     pub symbol: SymbolId,

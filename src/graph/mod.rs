@@ -8,6 +8,7 @@ pub mod impact;
 pub mod ops;
 pub mod types;
 
+pub use impact::{Warning, WarningKind};
 pub use types::{
     CodeGraph, Confidence, Edge, EdgeKind, LibraryImport, Symbol, SymbolId, SymbolKind, Visibility,
 };

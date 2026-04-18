@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Stable identifier for a symbol, keyed by `(file, name, kind)`.
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// Two symbols with the same textual name in the same file are distinct if
 /// they have different [`SymbolKind`]s (e.g. a class `Foo` and a type alias
 /// `Foo` co-exist in some TS files; both are reachable via the graph).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct SymbolId {
     pub file: PathBuf,
     pub name: String,
@@ -23,7 +24,7 @@ pub struct SymbolId {
 
 /// Discriminant for symbol lookups. Mirrors the cross-language union of
 /// declaration forms we care about for graph queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum SymbolKind {
     Function,
     AsyncFunction,

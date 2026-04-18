@@ -18,6 +18,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod config;
+pub mod edit;
 pub mod error;
 pub mod graph;
 pub mod index;
