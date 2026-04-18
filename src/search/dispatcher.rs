@@ -21,9 +21,9 @@ const DEFAULT_MAX_HITS: usize = 10;
 pub fn dispatch(graph: &CodeGraph, _project_root: &Path, query: &str) -> Vec<SearchHit> {
     match classify(query) {
         QueryKind::Find(name) => structural::find(graph, &name, DEFAULT_MAX_HITS),
+        QueryKind::Callers(name) => structural::callers_of(graph, &name, DEFAULT_MAX_HITS),
         // Arms below land in subsequent tasks.
-        QueryKind::Callers(_)
-        | QueryKind::Callees(_)
+        QueryKind::Callees(_)
         | QueryKind::Outline(_)
         | QueryKind::Chain(_, _)
         | QueryKind::TestsFor(_)
@@ -67,5 +67,26 @@ mod tests {
         let hits = dispatch(&g, Path::new("."), "find processRequest");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].signature.as_deref(), Some("fn processRequest()"));
+    }
+
+    #[test]
+    fn dispatches_callers_query() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+        let mut g = CodeGraph::new();
+        let t = sym("target");
+        let c = sym("caller");
+        let t_id = t.id.clone();
+        let c_id = c.id.clone();
+        g.insert_symbol(t);
+        g.insert_symbol(c);
+        g.insert_edge(Edge {
+            from: c_id,
+            to: t_id,
+            kind: EdgeKind::Calls,
+            line: 1,
+            confidence: Confidence::Certain,
+        });
+        let hits = dispatch(&g, Path::new("."), "callers of target");
+        assert_eq!(hits.len(), 1);
     }
 }

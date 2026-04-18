@@ -3,7 +3,7 @@
 //! Each public function resolves a [`super::query::QueryKind`] arm against the
 //! [`CodeGraph`] and renders hits via [`super::hit::SearchHit::structural`].
 
-use crate::graph::ops::find_by_name;
+use crate::graph::ops::{callers, find_by_name};
 use crate::graph::types::{CodeGraph, SymbolId};
 use crate::search::hit::{sort_by_centrality, SearchHit};
 
@@ -14,6 +14,31 @@ pub fn find(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
     let mut ids: Vec<&SymbolId> = find_by_name(graph, name);
     sort_by_centrality(graph, &mut ids);
     ids.into_iter()
+        .take(max_hits)
+        .filter_map(|id| graph.symbols.get(id))
+        .map(SearchHit::structural)
+        .collect()
+}
+
+/// `callers of X` / `what calls X` — reverse BFS (1 hop) with inline signatures.
+///
+/// Resolves `name` to the most-central exact-match symbol, then returns its
+/// direct callers sorted by their own centrality descending, capped at
+/// `max_hits`.
+#[must_use]
+pub fn callers_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
+    let mut targets = find_by_name(graph, name);
+    if targets.is_empty() {
+        return Vec::new();
+    }
+    sort_by_centrality(graph, &mut targets);
+    let Some(&target_id) = targets.first() else {
+        return Vec::new();
+    };
+    let mut caller_ids: Vec<&SymbolId> = callers(graph, target_id);
+    sort_by_centrality(graph, &mut caller_ids);
+    caller_ids
+        .into_iter()
         .take(max_hits)
         .filter_map(|id| graph.symbols.get(id))
         .map(SearchHit::structural)
@@ -102,5 +127,65 @@ mod tests {
         insert_with_centrality(&mut g, sym("process", "a.ts"), 0);
         let hits = find(&g, "xyz_no_match_anywhere", 10);
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn callers_of_returns_callers_with_signatures() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+
+        let mut g = CodeGraph::new();
+        let target = sym("target", "t.ts");
+        let caller_a = sym("caller_a", "a.ts");
+        let caller_b = sym("caller_b", "b.ts");
+        insert_with_centrality(&mut g, target.clone(), 0);
+        insert_with_centrality(&mut g, caller_a.clone(), 0);
+        insert_with_centrality(&mut g, caller_b.clone(), 0);
+
+        for caller in [&caller_a, &caller_b] {
+            g.insert_edge(Edge {
+                from: caller.id.clone(),
+                to: target.id.clone(),
+                kind: EdgeKind::Calls,
+                line: 5,
+                confidence: Confidence::Certain,
+            });
+        }
+
+        let hits = callers_of(&g, "target", 10);
+        let files: Vec<_> = hits.iter().map(|h| h.file.clone()).collect();
+        assert!(files.contains(&PathBuf::from("a.ts")));
+        assert!(files.contains(&PathBuf::from("b.ts")));
+        assert!(hits.iter().all(|h| h.signature.is_some()));
+    }
+
+    #[test]
+    fn callers_of_empty_when_target_missing() {
+        let g = CodeGraph::new();
+        let hits = callers_of(&g, "nonexistent", 10);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn callers_of_caps_at_max_hits() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+
+        let mut g = CodeGraph::new();
+        let target = sym("target", "t.ts");
+        insert_with_centrality(&mut g, target.clone(), 0);
+
+        for i in 0..15 {
+            let caller = sym(&format!("c{i}"), &format!("c{i}.ts"));
+            insert_with_centrality(&mut g, caller.clone(), 0);
+            g.insert_edge(Edge {
+                from: caller.id.clone(),
+                to: target.id.clone(),
+                kind: EdgeKind::Calls,
+                line: 1,
+                confidence: Confidence::Certain,
+            });
+        }
+
+        let hits = callers_of(&g, "target", 5);
+        assert_eq!(hits.len(), 5);
     }
 }
