@@ -11,6 +11,15 @@ tests/fixtures/*/.blastguard/
 # Log files
 *.log
 
+# Secrets — never commit API keys
+.env
+.env.*
+!.env.example
+*.env.local
+bench/.env
+bench/.env.*
+!bench/.env.example
+
 # Benchmark harness
 bench/results/*.jsonl
 bench/.venv/
