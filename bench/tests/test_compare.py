@@ -1,54 +1,26 @@
-"""Unit tests for compare.py aggregation."""
+"""Unit tests for compare.py paired analysis reporter."""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-from bench.compare import load_results, render_comparison
+from bench.compare import pair_results, format_report
+from bench.evaluator import EvaluatorResult
 
 
-def _write(tmp_path: Path, name: str, rows: list[dict]) -> Path:
-    p = tmp_path / name
-    with p.open("w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
-    return p
+def _res(task_id: str, resolved: bool, infra_failure: bool = False) -> EvaluatorResult:
+    return EvaluatorResult(task_id=task_id, resolved=resolved, infra_failure=infra_failure, raw={})
 
 
-def test_load_results_counts_resolved_and_tokens(tmp_path: Path) -> None:
-    path = _write(
-        tmp_path,
-        "a.jsonl",
-        [
-            {"resolved": True, "repo": "x", "tokens_in": 100, "tokens_out": 50, "turns": 5},
-            {"resolved": False, "repo": "x", "tokens_in": 200, "tokens_out": 80, "turns": 10},
-            {
-                "resolved": True, "repo": "y", "tokens_in": 50,
-                "tokens_out": 30, "turns": 3, "tampered": True,
-            },
-        ],
-    )
-    s = load_results(path)
-    assert s.total == 3
-    assert s.resolved == 2
-    assert s.tampered == 1
-    assert s.total_tokens_in == 350
-    assert s.total_tokens_out == 160
-    assert s.total_turns == 18
-    assert s.per_repo == {"x": (1, 2), "y": (1, 1)}
-    assert s.resolution_rate == 2 / 3
+def test_pair_results_excludes_infra_failures_from_either_arm():
+    raw = [_res("a", True), _res("b", False), _res("c", False, infra_failure=True)]
+    bg = [_res("a", True), _res("b", True), _res("c", True)]
+    paired = pair_results(raw, bg)
+    # "c" is excluded because raw hit an infra failure
+    assert set(paired.keys()) == {"a", "b"}
 
 
-def test_render_comparison_shows_deltas(tmp_path: Path) -> None:
-    b = _write(tmp_path, "b.jsonl", [
-        {"resolved": False, "repo": "x", "tokens_in": 100, "tokens_out": 50, "turns": 10},
-    ])
-    g = _write(tmp_path, "g.jsonl", [
-        {"resolved": True, "repo": "x", "tokens_in": 80, "tokens_out": 40, "turns": 5},
-    ])
-    text = render_comparison(load_results(b), load_results(g))
-    assert "0.0% → 100.0%" in text
-    assert "+100.0 pp" in text
-    assert "-20" in text  # tokens_in delta
-    assert "Per-repo" in text
+def test_format_report_includes_mcnemar():
+    raw = [_res("a", True), _res("b", False), _res("c", False), _res("d", True)]
+    bg = [_res("a", True), _res("b", True), _res("c", True), _res("d", False)]
+    report = format_report(raw, bg)
+    assert "McNemar" in report
+    assert "blastguard_wins" in report.lower() or "BlastGuard wins" in report

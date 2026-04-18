@@ -1,110 +1,89 @@
-"""Compare two JSONL result sets and print delta metrics."""
+"""Paired analysis reporter.
+
+Loads two arms' evaluator outputs, pairs them by task_id, excludes any
+task where either arm hit an infra_failure (rate limits, Docker crashes,
+evaluator errors), then runs McNemar's test.
+"""
 
 from __future__ import annotations
 
-import json
-import sys
-from dataclasses import dataclass
+import argparse
 from pathlib import Path
 
-import click
+from bench.evaluator import EvaluatorResult, parse_evaluator_output
+from bench.stats import mcnemar_paired
 
 
-@dataclass(frozen=True, slots=True)
-class Summary:
-    total: int
-    resolved: int
-    tampered: int
-    total_tokens_in: int
-    total_tokens_out: int
-    total_turns: int
-    per_repo: dict[str, tuple[int, int]]  # repo -> (resolved, total)
-
-    @property
-    def resolution_rate(self) -> float:
-        return (self.resolved / self.total) if self.total else 0.0
+def pair_results(
+    raw: list[EvaluatorResult],
+    blastguard: list[EvaluatorResult],
+) -> dict[str, tuple[EvaluatorResult, EvaluatorResult]]:
+    """Intersect by task_id and drop infra failures from either arm."""
+    raw_map = {r.task_id: r for r in raw if not r.infra_failure}
+    bg_map = {r.task_id: r for r in blastguard if not r.infra_failure}
+    shared = raw_map.keys() & bg_map.keys()
+    return {tid: (raw_map[tid], bg_map[tid]) for tid in shared}
 
 
-def load_results(path: Path) -> Summary:
-    total = 0
-    resolved = 0
-    tampered = 0
-    tokens_in = 0
-    tokens_out = 0
-    turns = 0
-    per_repo: dict[str, list[int]] = {}
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            total += 1
-            if row.get("resolved"):
-                resolved += 1
-            if row.get("tampered"):
-                tampered += 1
-            tokens_in += int(row.get("tokens_in", 0))
-            tokens_out += int(row.get("tokens_out", 0))
-            turns += int(row.get("turns", 0))
-            repo = row.get("repo", "unknown")
-            per_repo.setdefault(repo, [0, 0])
-            per_repo[repo][1] += 1
-            if row.get("resolved"):
-                per_repo[repo][0] += 1
-    return Summary(
-        total=total,
-        resolved=resolved,
-        tampered=tampered,
-        total_tokens_in=tokens_in,
-        total_tokens_out=tokens_out,
-        total_turns=turns,
-        per_repo={k: (v[0], v[1]) for k, v in per_repo.items()},
+def format_report(
+    raw: list[EvaluatorResult],
+    blastguard: list[EvaluatorResult],
+) -> str:
+    pairs = pair_results(raw, blastguard)
+    both_pass = both_fail = raw_only = bg_only = 0
+    for r, b in pairs.values():
+        if r.resolved and b.resolved:
+            both_pass += 1
+        elif not r.resolved and not b.resolved:
+            both_fail += 1
+        elif r.resolved and not b.resolved:
+            raw_only += 1
+        else:
+            bg_only += 1
+
+    stats = mcnemar_paired([
+        ("both_pass", both_pass),
+        ("both_fail", both_fail),
+        ("raw_only_pass", raw_only),
+        ("blastguard_only_pass", bg_only),
+    ])
+
+    raw_infra = sum(1 for r in raw if r.infra_failure)
+    bg_infra = sum(1 for r in blastguard if r.infra_failure)
+
+    return (
+        f"Paired McNemar's Test — BlastGuard vs raw\n"
+        f"===========================================\n"
+        f"Paired tasks:          {stats.n}\n"
+        f"Infra failures (raw):  {raw_infra} (excluded)\n"
+        f"Infra failures (bg):   {bg_infra} (excluded)\n"
+        f"\n"
+        f"Both pass:             {stats.both_pass}\n"
+        f"Both fail:             {stats.both_fail}\n"
+        f"Raw wins (only raw):   {stats.raw_wins}\n"
+        f"BlastGuard wins:       {stats.blastguard_wins}\n"
+        f"\n"
+        f"Raw score:             {stats.raw_score_pct:.2f}%\n"
+        f"BlastGuard score:      {stats.blastguard_score_pct:.2f}%\n"
+        f"Delta:                 {stats.delta_pct:+.2f} pp\n"
+        f"\n"
+        f"Test:                  {stats.test_used}\n"
+        f"p-value:               {stats.p_value:.4f}\n"
+        f"Significant (α=0.05):  {'YES' if stats.p_value < 0.05 else 'NO'}\n"
     )
 
 
-def render_comparison(baseline: Summary, blastguard: Summary) -> str:
-    lines: list[str] = []
-    lines.append("=== Comparison ===")
-    lines.append(
-        f"Resolution rate: {baseline.resolution_rate:.1%} → "
-        f"{blastguard.resolution_rate:.1%} "
-        f"(Δ {(blastguard.resolution_rate - baseline.resolution_rate) * 100:+.1f} pp)"
-    )
-    lines.append(
-        f"Resolved: {baseline.resolved}/{baseline.total} → "
-        f"{blastguard.resolved}/{blastguard.total}"
-    )
-    lines.append(f"Tampered: {baseline.tampered} → {blastguard.tampered}")
-    lines.append(
-        f"Tokens in (total): {baseline.total_tokens_in:,} → {blastguard.total_tokens_in:,} "
-        f"(Δ {blastguard.total_tokens_in - baseline.total_tokens_in:+,})"
-    )
-    lines.append(
-        f"Tokens out (total): {baseline.total_tokens_out:,} → {blastguard.total_tokens_out:,} "
-        f"(Δ {blastguard.total_tokens_out - baseline.total_tokens_out:+,})"
-    )
-    lines.append(
-        f"Turns (total): {baseline.total_turns} → {blastguard.total_turns} "
-        f"(Δ {blastguard.total_turns - baseline.total_turns:+})"
-    )
-    lines.append("")
-    lines.append("Per-repo:")
-    all_repos = sorted(set(baseline.per_repo) | set(blastguard.per_repo))
-    for repo in all_repos:
-        b = baseline.per_repo.get(repo, (0, 0))
-        bg = blastguard.per_repo.get(repo, (0, 0))
-        lines.append(f"  {repo}: {b[0]}/{b[1]} → {bg[0]}/{bg[1]}")
-    return "\n".join(lines)
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--raw-output-dir", type=Path, required=True)
+    p.add_argument("--blastguard-output-dir", type=Path, required=True)
+    args = p.parse_args()
 
-
-@click.command()
-@click.argument("baseline_path", type=click.Path(exists=True, path_type=Path))
-@click.argument("blastguard_path", type=click.Path(exists=True, path_type=Path))
-def main(baseline_path: Path, blastguard_path: Path) -> None:
-    baseline = load_results(baseline_path)
-    blastguard = load_results(blastguard_path)
-    sys.stdout.write(render_comparison(baseline, blastguard) + "\n")
+    raw = parse_evaluator_output(args.raw_output_dir)
+    bg = parse_evaluator_output(args.blastguard_output_dir)
+    print(format_report(raw, bg))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
