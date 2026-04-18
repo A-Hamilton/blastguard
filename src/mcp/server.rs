@@ -309,6 +309,13 @@ pub async fn run(project_root: &Path) -> anyhow::Result<()> {
 
     let server = BlastGuardServer::new(graph, project_root.to_path_buf(), config);
 
+    let watcher_handle = crate::index::watcher::spawn_watcher(
+        project_root.to_path_buf(),
+        Arc::clone(&server.graph),
+    )
+    .context("spawning file watcher")?;
+    tracing::info!("file watcher active at 100ms debounce");
+
     tracing::info!(
         project_root = %project_root.display(),
         version = env!("CARGO_PKG_VERSION"),
@@ -328,6 +335,9 @@ pub async fn run(project_root: &Path) -> anyhow::Result<()> {
         .waiting()
         .await
         .context("MCP service terminated with error")?;
+
+    watcher_handle.abort();
+    let _ = watcher_handle.await;
 
     tracing::info!("BlastGuard MCP server shutting down cleanly");
     Ok(())
