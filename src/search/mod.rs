@@ -15,3 +15,4 @@ pub mod text;
 
 pub use dispatcher::dispatch;
 pub use hit::SearchHit;
+pub use query::QueryKind;
