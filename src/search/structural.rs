@@ -127,6 +127,21 @@ pub fn importers_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit>
     hits
 }
 
+/// `exports of FILE` — visibility-filtered symbols declared in `file`.
+#[must_use]
+pub fn exports_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
+    use crate::graph::types::Visibility;
+    let Some(sym_ids) = graph.file_symbols.get(file) else {
+        return Vec::new();
+    };
+    sym_ids
+        .iter()
+        .filter_map(|id| graph.symbols.get(id))
+        .filter(|s| matches!(s.visibility, Visibility::Export))
+        .map(SearchHit::structural)
+        .collect()
+}
+
 /// `outline of FILE` — all symbols declared in `file`, sorted by `line_start`.
 #[must_use]
 pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
@@ -412,5 +427,20 @@ mod tests {
         let importers = importers_of(&g, std::path::Path::new("b.ts"));
         assert_eq!(importers.len(), 1);
         assert_eq!(importers[0].file, PathBuf::from("a.ts"));
+    }
+
+    #[test]
+    fn exports_of_returns_only_exported_symbols() {
+        use crate::graph::types::Visibility;
+        let mut g = CodeGraph::new();
+        let mut pub_sym = sym("api", "x.ts");
+        pub_sym.visibility = Visibility::Export;
+        let mut priv_sym = sym("internal", "x.ts");
+        priv_sym.visibility = Visibility::Private;
+        g.insert_symbol(pub_sym);
+        g.insert_symbol(priv_sym);
+        let hits = exports_of(&g, std::path::Path::new("x.ts"));
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].signature.as_deref().unwrap().contains("api"));
     }
 }
