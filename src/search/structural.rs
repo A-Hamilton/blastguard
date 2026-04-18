@@ -3,7 +3,7 @@
 //! Each public function resolves a [`super::query::QueryKind`] arm against the
 //! [`CodeGraph`] and renders hits via [`super::hit::SearchHit::structural`].
 
-use crate::graph::ops::{callers, find_by_name};
+use crate::graph::ops::{callees, callers, find_by_name};
 use crate::graph::types::{CodeGraph, SymbolId};
 use crate::search::hit::{sort_by_centrality, SearchHit};
 
@@ -38,6 +38,27 @@ pub fn callers_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchH
     let mut caller_ids: Vec<&SymbolId> = callers(graph, target_id);
     sort_by_centrality(graph, &mut caller_ids);
     caller_ids
+        .into_iter()
+        .take(max_hits)
+        .filter_map(|id| graph.symbols.get(id))
+        .map(SearchHit::structural)
+        .collect()
+}
+
+/// `callees of X` / `what does X call` — forward edges with inline signatures.
+#[must_use]
+pub fn callees_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
+    let mut sources = find_by_name(graph, name);
+    if sources.is_empty() {
+        return Vec::new();
+    }
+    sort_by_centrality(graph, &mut sources);
+    let Some(&source_id) = sources.first() else {
+        return Vec::new();
+    };
+    let mut callee_ids: Vec<&SymbolId> = callees(graph, source_id);
+    sort_by_centrality(graph, &mut callee_ids);
+    callee_ids
         .into_iter()
         .take(max_hits)
         .filter_map(|id| graph.symbols.get(id))
@@ -187,5 +208,30 @@ mod tests {
 
         let hits = callers_of(&g, "target", 5);
         assert_eq!(hits.len(), 5);
+    }
+
+    #[test]
+    fn callees_of_returns_forward_edges() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+        let mut g = CodeGraph::new();
+        let caller = sym("caller", "a.ts");
+        let callee_a = sym("helper_a", "b.ts");
+        let callee_b = sym("helper_b", "c.ts");
+        insert_with_centrality(&mut g, caller.clone(), 0);
+        insert_with_centrality(&mut g, callee_a.clone(), 0);
+        insert_with_centrality(&mut g, callee_b.clone(), 0);
+        for callee in [&callee_a, &callee_b] {
+            g.insert_edge(Edge {
+                from: caller.id.clone(),
+                to: callee.id.clone(),
+                kind: EdgeKind::Calls,
+                line: 5,
+                confidence: Confidence::Certain,
+            });
+        }
+        let hits = callees_of(&g, "caller", 10);
+        let files: Vec<_> = hits.iter().map(|h| h.file.clone()).collect();
+        assert!(files.contains(&PathBuf::from("b.ts")));
+        assert!(files.contains(&PathBuf::from("c.ts")));
     }
 }

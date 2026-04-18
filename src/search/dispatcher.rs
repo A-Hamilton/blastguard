@@ -22,9 +22,9 @@ pub fn dispatch(graph: &CodeGraph, _project_root: &Path, query: &str) -> Vec<Sea
     match classify(query) {
         QueryKind::Find(name) => structural::find(graph, &name, DEFAULT_MAX_HITS),
         QueryKind::Callers(name) => structural::callers_of(graph, &name, DEFAULT_MAX_HITS),
+        QueryKind::Callees(name) => structural::callees_of(graph, &name, DEFAULT_MAX_HITS),
         // Arms below land in subsequent tasks.
-        QueryKind::Callees(_)
-        | QueryKind::Outline(_)
+        QueryKind::Outline(_)
         | QueryKind::Chain(_, _)
         | QueryKind::TestsFor(_)
         | QueryKind::ImportsOf(_)
