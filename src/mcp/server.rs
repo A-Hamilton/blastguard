@@ -169,6 +169,41 @@ single-line fixes your native edit tool is fine.",
             Err(err) => Err(to_error_result(&err)),
         }
     }
+
+    /// Run the project's test suite and return attributed failure summaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CallToolResult` with `is_error: true` on `NoTestRunner`,
+    /// `TestTimeout`, or `TestCrashed`. Normal failing tests (non-zero exit
+    /// with parseable output) return `Ok` with `failed > 0`.
+    #[tool(
+        name = "run_tests",
+        description = "Run the project's tests. Auto-detects runner. Returns pass/fail \
+counts and failure locations mapped back to source functions you recently modified \
+via the graph. Use after edits. Modern models self-verify; this tool's unique value \
+is attribution: linking test failures to your own recent edits.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub fn run_tests_tool(
+        &self,
+        Parameters(req): Parameters<crate::runner::RunTestsRequest>,
+    ) -> Result<Json<crate::runner::RunTestsResponse>, CallToolResult> {
+        match crate::mcp::run_tests::handle(
+            &self.graph,
+            &self.session,
+            &self.project_root,
+            &req,
+        ) {
+            Ok(resp) => Ok(Json(resp)),
+            Err(err) => Err(to_error_result(&err)),
+        }
+    }
 }
 
 // ── ServerHandler impl ────────────────────────────────────────────────────────
