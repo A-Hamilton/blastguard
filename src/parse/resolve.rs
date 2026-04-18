@@ -280,6 +280,45 @@ pub fn resolve_py(project_root: &Path, _from_file: &Path, spec: &str) -> Resolve
     }
 }
 
+/// Resolve a Rust `use` path.
+///
+/// Rules:
+/// - `crate::foo::bar` / `self::foo::bar` / `super::foo::bar` → try
+///   `<project_root>/src/foo/bar.rs`, then `<project_root>/src/foo/bar/mod.rs`.
+///   Returns [`ResolveResult::Unresolved`] when neither exists.
+/// - External crate (`tokio::…`, `std::…`) → [`ResolveResult::External`] with
+///   the head segment as the library name.
+/// - `super::` is treated as `crate::` for Phase 1.3 — walking up from
+///   `from_file`'s module is a known Phase 2 refinement.
+#[must_use]
+pub fn resolve_rs(project_root: &Path, _from_file: &Path, spec: &str) -> ResolveResult {
+    let head = spec.split("::").next().unwrap_or("");
+    match head {
+        "crate" | "self" | "super" => {
+            let tail: Vec<&str> = spec.split("::").skip(1).collect();
+            if tail.is_empty() {
+                return ResolveResult::Unresolved;
+            }
+            let rel: PathBuf = tail.iter().collect();
+            let candidates = [
+                project_root.join("src").join(&rel).with_extension("rs"),
+                project_root.join("src").join(&rel).join("mod.rs"),
+            ];
+            for c in candidates {
+                if c.is_file() {
+                    return ResolveResult::Internal(c);
+                }
+            }
+            ResolveResult::Unresolved
+        }
+        "" => ResolveResult::Unresolved,
+        _ => ResolveResult::External {
+            library: head.to_owned(),
+            symbols: Vec::new(),
+        },
+    }
+}
+
 /// Strip `//` line comments from a JSONC string.
 ///
 /// Only line comments are handled. Block comments are rare in tsconfig files
@@ -529,6 +568,81 @@ mod tests {
         let tmp = tempdir_with(&[("src/a.py", "")]);
         let from = tmp.path().join("src/a.py");
         let r = resolve_py(tmp.path(), &from, ".");
+        assert_eq!(r, ResolveResult::Unresolved);
+    }
+
+    // ── Rust resolver tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn resolves_rust_crate_path_to_file() {
+        let tmp = tempdir_with(&[
+            ("src/main.rs", ""),
+            ("src/utils/auth.rs", ""),
+            ("src/utils/mod.rs", ""),
+        ]);
+        let from = tmp.path().join("src/main.rs");
+        let r = resolve_rs(tmp.path(), &from, "crate::utils::auth");
+        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/auth.rs")));
+    }
+
+    #[test]
+    fn resolves_rust_mod_rs_for_package() {
+        let tmp = tempdir_with(&[
+            ("src/main.rs", ""),
+            ("src/utils/mod.rs", ""),
+        ]);
+        let from = tmp.path().join("src/main.rs");
+        let r = resolve_rs(tmp.path(), &from, "crate::utils");
+        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/mod.rs")));
+    }
+
+    #[test]
+    fn resolves_rust_with_self_prefix() {
+        let tmp = tempdir_with(&[
+            ("src/a.rs", ""),
+            ("src/helper.rs", ""),
+        ]);
+        let from = tmp.path().join("src/a.rs");
+        let r = resolve_rs(tmp.path(), &from, "self::helper");
+        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/helper.rs")));
+    }
+
+    #[test]
+    fn external_crate_path_is_external() {
+        let tmp = tempdir_with(&[("src/main.rs", "")]);
+        let from = tmp.path().join("src/main.rs");
+        let r = resolve_rs(tmp.path(), &from, "tokio::sync::Mutex");
+        match r {
+            ResolveResult::External { library, .. } => assert_eq!(library, "tokio"),
+            _ => panic!("expected External, got {r:?}"),
+        }
+    }
+
+    #[test]
+    fn std_path_is_external() {
+        let tmp = tempdir_with(&[("src/main.rs", "")]);
+        let from = tmp.path().join("src/main.rs");
+        let r = resolve_rs(tmp.path(), &from, "std::collections::HashMap");
+        match r {
+            ResolveResult::External { library, .. } => assert_eq!(library, "std"),
+            _ => panic!("expected External, got {r:?}"),
+        }
+    }
+
+    #[test]
+    fn unresolved_rust_crate_path_when_file_absent() {
+        let tmp = tempdir_with(&[("src/main.rs", "")]);
+        let from = tmp.path().join("src/main.rs");
+        let r = resolve_rs(tmp.path(), &from, "crate::missing::mod");
+        assert_eq!(r, ResolveResult::Unresolved);
+    }
+
+    #[test]
+    fn bare_crate_without_path_is_unresolved() {
+        let tmp = tempdir_with(&[("src/main.rs", "")]);
+        let from = tmp.path().join("src/main.rs");
+        // `use crate;` has no tail segment — ambiguous.
+        let r = resolve_rs(tmp.path(), &from, "crate");
         assert_eq!(r, ResolveResult::Unresolved);
     }
 }
