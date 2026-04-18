@@ -594,7 +594,7 @@ git commit -m "bench: paired McNemar's test for A/B analysis"
 
 Background: SWE-bench_Pro-os issue #78 — API rate-limit errors in the evaluator are silently scored as task failures, contaminating the benchmark. We wrap the subprocess to (a) validate the evaluator finished cleanly, (b) parse its per-instance output JSON, (c) surface infra failures separately from task failures.
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 `bench/tests/test_evaluator.py`:
 
@@ -659,12 +659,12 @@ def test_write_patches_json_matches_evaluator_format(tmp_path: Path):
     assert data[1]["patch"] == ""
 ```
 
-- [ ] **Step 2: Run to confirm they fail**
+- [x] **Step 2: Run to confirm they fail**
 
 Run: `cd bench && uv run pytest tests/test_evaluator.py -v`
 Expected: FAIL — `ModuleNotFoundError: bench.evaluator`.
 
-- [ ] **Step 3: Implement `bench/evaluator.py`**
+- [x] **Step 3: Implement `bench/evaluator.py`**
 
 ```python
 """Wrapper for scaleapi/SWE-bench_Pro-os evaluator.
@@ -772,12 +772,12 @@ def run_evaluator(
     return proc.returncode
 ```
 
-- [ ] **Step 4: Run tests to confirm pass**
+- [x] **Step 4: Run tests to confirm pass**
 
 Run: `cd bench && uv run pytest tests/test_evaluator.py -v`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bench/evaluator.py bench/tests/test_evaluator.py
