@@ -20,7 +20,6 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-
 TAMPER_PATTERNS: tuple[str, ...] = (
     "conftest.py",
     "pytest.ini",

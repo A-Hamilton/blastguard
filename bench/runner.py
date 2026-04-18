@@ -31,7 +31,6 @@ from bench.mcp_client import blastguard_session, find_blastguard_binary
 from bench.prompts import BASELINE_SYSTEM, BLASTGUARD_SYSTEM
 from bench.tasks import Task, load_tasks
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -154,7 +153,8 @@ async def run_one_task(
                 if name in bg_tool_names:
                     call_result = await mcp_session.call_tool(name, args)
                     if call_result.isError:
-                        return f"[BlastGuard error] {call_result.content[0].text if call_result.content else ''}"
+                        first = call_result.content[0].text if call_result.content else ""
+                        return f"[BlastGuard error] {first}"
                     return "\n".join(
                         getattr(c, "text", "") for c in call_result.content
                     )[:4000]

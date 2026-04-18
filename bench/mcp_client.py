@@ -8,9 +8,9 @@ so the agent loop can forward tool-use requests.
 from __future__ import annotations
 
 import shutil
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
 
 try:
     from mcp import ClientSession
@@ -52,7 +52,6 @@ async def blastguard_session(
         args=[str(project_root)],
         env=None,
     )
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
+    async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        yield session

@@ -23,7 +23,10 @@ def test_load_results_counts_resolved_and_tokens(tmp_path: Path) -> None:
         [
             {"resolved": True, "repo": "x", "tokens_in": 100, "tokens_out": 50, "turns": 5},
             {"resolved": False, "repo": "x", "tokens_in": 200, "tokens_out": 80, "turns": 10},
-            {"resolved": True, "repo": "y", "tokens_in": 50, "tokens_out": 30, "turns": 3, "tampered": True},
+            {
+                "resolved": True, "repo": "y", "tokens_in": 50,
+                "tokens_out": 30, "turns": 3, "tampered": True,
+            },
         ],
     )
     s = load_results(path)
