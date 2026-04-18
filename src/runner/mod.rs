@@ -5,6 +5,7 @@
 //! structured records that `mcp::run_tests` annotates with session
 //! attribution.
 
+pub mod attribute;
 pub mod detect;
 pub mod execute;
 pub mod parse;
