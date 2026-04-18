@@ -1,4 +1,4 @@
-//! End-to-end: cold_index the sample fixture, then exercise several search
+//! End-to-end: `cold_index` the sample fixture, then exercise several search
 //! dispatcher patterns. This pins that the search surface works against
 //! real indexed data, not just synthetic fixtures.
 
