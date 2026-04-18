@@ -127,6 +127,39 @@ pub fn importers_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit>
     hits
 }
 
+/// Heuristic: a path is a "test path" if any component contains `.test.`,
+/// `_test`, `test_`, or equals `tests`.
+fn is_test_path(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        s == "tests"
+            || s.contains(".test.")
+            || s.contains("_test")
+            || s.starts_with("test_")
+    })
+}
+
+/// `tests for X` — if X contains a path separator treat it as a file, else
+/// resolve X as a symbol name to its declaring file. Returns importers of
+/// that file whose path is a test path.
+#[must_use]
+pub fn tests_for(graph: &CodeGraph, target: &str) -> Vec<SearchHit> {
+    let target_file = if target.contains('/') || target.contains('\\') {
+        std::path::PathBuf::from(target)
+    } else {
+        let ids = find_by_name(graph, target);
+        let Some(&id) = ids.first() else {
+            return Vec::new();
+        };
+        id.file.clone()
+    };
+
+    importers_of(graph, &target_file)
+        .into_iter()
+        .filter(|hit| is_test_path(&hit.file))
+        .collect()
+}
+
 /// `exports of FILE` — visibility-filtered symbols declared in `file`.
 #[must_use]
 pub fn exports_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
@@ -427,6 +460,53 @@ mod tests {
         let importers = importers_of(&g, std::path::Path::new("b.ts"));
         assert_eq!(importers.len(), 1);
         assert_eq!(importers[0].file, PathBuf::from("a.ts"));
+    }
+
+    #[test]
+    fn tests_for_file_filters_importers_to_test_paths_only() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind, SymbolKind};
+        let mut g = CodeGraph::new();
+        let src_id = SymbolId {
+            file: PathBuf::from("src/handler.ts"),
+            name: "handler".to_string(),
+            kind: SymbolKind::Module,
+        };
+        let test_id = SymbolId {
+            file: PathBuf::from("tests/handler.test.ts"),
+            name: "test_handler".to_string(),
+            kind: SymbolKind::Module,
+        };
+        let other_id = SymbolId {
+            file: PathBuf::from("src/other.ts"),
+            name: "other".to_string(),
+            kind: SymbolKind::Module,
+        };
+        for id in [&src_id, &test_id, &other_id] {
+            let mut s = sym(&id.name, &id.file.to_string_lossy());
+            s.id = id.clone();
+            g.insert_symbol(s);
+        }
+        for from in [&test_id, &other_id] {
+            g.insert_edge(Edge {
+                from: from.clone(),
+                to: src_id.clone(),
+                kind: EdgeKind::Imports,
+                line: 1,
+                confidence: Confidence::Certain,
+            });
+        }
+        let hits = tests_for(&g, "src/handler.ts");
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].file.to_string_lossy().contains(".test."));
+    }
+
+    #[test]
+    fn tests_for_symbol_name_resolves_to_file_first() {
+        let mut g = CodeGraph::new();
+        g.insert_symbol(sym("processRequest", "src/handler.ts"));
+        let hits = tests_for(&g, "processRequest");
+        // No importers at all → empty; just verifies it doesn't panic.
+        assert!(hits.is_empty());
     }
 
     #[test]

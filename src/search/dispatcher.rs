@@ -28,9 +28,9 @@ pub fn dispatch(graph: &CodeGraph, _project_root: &Path, query: &str) -> Vec<Sea
         QueryKind::ImportsOf(path) => structural::imports_of(graph, &path),
         QueryKind::ImportersOf(path) => structural::importers_of(graph, &path),
         QueryKind::ExportsOf(path) => structural::exports_of(graph, &path),
+        QueryKind::TestsFor(target) => structural::tests_for(graph, &target),
         // Arms below land in subsequent tasks.
-        QueryKind::TestsFor(_)
-        | QueryKind::Libraries
+        QueryKind::Libraries
         | QueryKind::Grep(_) => Vec::new(),
     }
 }
