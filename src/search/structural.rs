@@ -127,6 +127,26 @@ pub fn importers_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit>
     hits
 }
 
+/// `libraries` — external imports grouped by library name with use counts.
+/// Returns results sorted alphabetically by library name (`BTreeMap` iteration).
+#[must_use]
+pub fn libraries(graph: &CodeGraph) -> Vec<SearchHit> {
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<&str, u32> = BTreeMap::new();
+    for li in &graph.library_imports {
+        *counts.entry(li.library.as_str()).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(lib, count)| SearchHit {
+            file: std::path::PathBuf::new(),
+            line: 0,
+            signature: Some(format!("{lib} ({count} uses)")),
+            snippet: None,
+        })
+        .collect()
+}
+
 /// Heuristic: a path is a "test path" if any component contains `.test.`,
 /// `_test`, `test_`, or equals `tests`.
 fn is_test_path(path: &std::path::Path) -> bool {
@@ -522,5 +542,31 @@ mod tests {
         let hits = exports_of(&g, std::path::Path::new("x.ts"));
         assert_eq!(hits.len(), 1);
         assert!(hits[0].signature.as_deref().unwrap().contains("api"));
+    }
+
+    #[test]
+    fn libraries_returns_unique_libraries_with_counts() {
+        use crate::graph::types::LibraryImport;
+        let mut g = CodeGraph::new();
+        for (lib, file, line) in [
+            ("lodash", "a.ts", 1),
+            ("lodash", "b.ts", 1),
+            ("@tanstack/react-query", "a.ts", 2),
+            ("tokio", "lib.rs", 1),
+        ] {
+            g.library_imports.push(LibraryImport {
+                library: lib.to_string(),
+                symbol: String::new(),
+                file: std::path::PathBuf::from(file),
+                line,
+            });
+        }
+        let hits = libraries(&g);
+        assert_eq!(hits.len(), 3);
+        let lodash_hit = hits
+            .iter()
+            .find(|h| h.signature.as_deref().is_some_and(|s| s.contains("lodash")))
+            .expect("lodash missing");
+        assert!(lodash_hit.signature.as_deref().unwrap().contains("2 uses"));
     }
 }
