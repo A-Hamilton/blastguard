@@ -24,13 +24,14 @@ Projected lift on SWE-bench Pro: **+1 to +3 points** with realistic confidence i
 - Opus 4.7 + BlastGuard: 65% to 67% (from 64.3% baseline)
 - GLM-5.1 + BlastGuard: 60% to 63% (from 58.4% baseline)
 
-## Stack (verified April 2026)
+## Stack (verified April 2026 — reconciled against Cargo.toml)
 
-- `rmcp` v0.16+ with `["server", "transport-io", "macros"]` + `schemars` v0.8
-- `tree-sitter` v0.24 + grammars: TS v0.23, JS v0.23, Python v0.23, Rust v0.24
-- `sqlite-vec` v0.1.6+ for semantic vector search
-- `fastembed` v4+ for local embeddings (BGE-small or similar, ~130MB)
-- `notify` v7 + `notify-debouncer-mini` v0.5
+- `rmcp` v1.5 with `["server", "transport-io", "macros", "schemars"]` + `schemars` v0.9
+- `tree-sitter` v0.24 + grammars: TS v0.23, JS v0.23, Python v0.23, Rust **v0.21** (0.22+ emits ABI 15; core 0.24 max ABI is 14 — upgrading core to 0.26+ is post-MVP)
+- `streaming-iterator` v0.1.9 (required by tree-sitter 0.24's `QueryCursor::matches` streaming API)
+- `sqlite-vec` v0.1.6+ for semantic vector search (Phase 2, feature-flagged)
+- `fastembed` v5 for local embeddings (BGE-small or similar, ~130MB; Phase 2, feature-flagged)
+- `notify` v8 + `notify-debouncer-mini` v0.7 (must track notify major version)
 - `ignore` v0.4, `regex` v1, `rayon` v1.10, `rmp-serde` v1
 - `blake3` v1, `strsim` v0.11, `seahash` v4, `uuid` v1, `toml` v0.8
 - `tokio` v1, `serde` v1, `thiserror` v2, `anyhow` v1, `tracing` v0.1
