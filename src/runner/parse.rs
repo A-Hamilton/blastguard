@@ -360,4 +360,27 @@ mod tests {
         assert_eq!(f.line, 10);
         assert!(f.message.contains("AssertionError"));
     }
+
+    #[test]
+    fn pytest_failing_parses_counts_and_file() {
+        let r = parse_pytest(&fixture("pytest_failing.json"));
+        assert_eq!(r.passed, 1);
+        assert_eq!(r.failed, 1);
+        assert_eq!(r.duration_ms, 100);
+        assert_eq!(r.failures.len(), 1);
+        let f = &r.failures[0];
+        assert_eq!(f.test_name, "test_fail");
+        assert_eq!(f.file, PathBuf::from("tests/test_handler.py"));
+        assert_eq!(f.line, 23);
+        assert!(f.message.contains("AssertionError"));
+    }
+
+    #[test]
+    fn pytest_stack_populated_from_traceback() {
+        let r = parse_pytest(&fixture("pytest_failing.json"));
+        let f = &r.failures[0];
+        assert!(!f.stack.is_empty());
+        assert_eq!(f.stack[0].0, PathBuf::from("tests/test_handler.py"));
+        assert_eq!(f.stack[0].1, 23);
+    }
 }
