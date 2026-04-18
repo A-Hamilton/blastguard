@@ -530,6 +530,42 @@ mod tests {
     }
 
     #[test]
+    fn find_and_callers_of_rank_by_centrality_consistently() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+
+        let mut g = CodeGraph::new();
+        let target = sym("target", "t.ts");
+        let hi = sym("hi", "hi.ts");
+        let lo = sym("lo", "lo.ts");
+
+        // find() ranks name matches by the SYMBOL'S centrality.
+        insert_with_centrality(&mut g, target.clone(), 0);
+        insert_with_centrality(&mut g, hi.clone(), 100);
+        insert_with_centrality(&mut g, lo.clone(), 1);
+
+        // callers_of() ranks callers by the CALLER'S centrality.
+        for caller in [&hi, &lo] {
+            g.insert_edge(Edge {
+                from: caller.id.clone(),
+                to: target.id.clone(),
+                kind: EdgeKind::Calls,
+                line: 1,
+                confidence: Confidence::Certain,
+            });
+        }
+
+        // `find hi` returns the high-centrality hit first (only one match).
+        let find_hits = find(&g, "hi", 10);
+        assert_eq!(find_hits.len(), 1);
+        assert_eq!(find_hits[0].file, PathBuf::from("hi.ts"));
+
+        // `callers of target` orders hi before lo because hi has centrality 100.
+        let caller_hits = callers_of(&g, "target", 10);
+        assert_eq!(caller_hits[0].file, PathBuf::from("hi.ts"));
+        assert_eq!(caller_hits[1].file, PathBuf::from("lo.ts"));
+    }
+
+    #[test]
     fn exports_of_returns_only_exported_symbols() {
         use crate::graph::types::Visibility;
         let mut g = CodeGraph::new();
