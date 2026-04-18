@@ -46,3 +46,62 @@ pub enum Runner {
 }
 
 pub use request::{RunTestsRequest, RunTestsResponse};
+
+use std::path::Path;
+use std::sync::Mutex;
+use std::time::Duration;
+
+use crate::error::{BlastGuardError, Result};
+use crate::graph::types::CodeGraph;
+use crate::session::SessionState;
+
+/// Entry point for the `run_tests` tool backend.
+///
+/// Sequence: [`detect::autodetect`] → [`execute::build_command`] →
+/// [`execute::run`] with timeout → [`parse::parse`] →
+/// [`attribute::annotate_failures`] → [`SessionState::record_test_results`]
+/// → [`RunTestsResponse`] (via `From<TestResults>`).
+///
+/// # Errors
+/// - [`BlastGuardError::NoTestRunner`] when detection returns `None`.
+/// - [`BlastGuardError::TestTimeout`] when the runner exceeds its budget.
+/// - [`BlastGuardError::TestCrashed`] when spawn/wait fails. Normal
+///   failing-tests return `Ok` with `failed > 0`.
+///
+/// # Panics
+/// Panics if the `graph` or `session` `Mutex` is poisoned (a previous thread
+/// panicked while holding the lock — the process is in an unrecoverable state
+/// at that point and a panic is appropriate).
+pub fn run_tests(
+    graph: &Mutex<CodeGraph>,
+    session: &Mutex<SessionState>,
+    project_root: &Path,
+    request: &RunTestsRequest,
+) -> Result<RunTestsResponse> {
+    let runner = detect::autodetect(project_root).ok_or(BlastGuardError::NoTestRunner)?;
+    let cmd = execute::build_command(runner, project_root, request.filter.as_deref());
+    let exec = execute::run(cmd, Duration::from_secs(request.timeout_seconds))?;
+
+    if exec.timed_out {
+        return Err(BlastGuardError::TestTimeout {
+            seconds: request.timeout_seconds,
+        });
+    }
+
+    let mut results = parse::parse(runner, &exec.stdout);
+    results.duration_ms = u64::try_from(exec.duration.as_millis()).unwrap_or(u64::MAX);
+
+    let annotated = {
+        let g = graph.lock().expect("graph lock poisoned");
+        let s = session.lock().expect("session lock poisoned");
+        attribute::annotate_failures(&g, &s, results.failures)
+    };
+    results.failures = annotated;
+
+    {
+        let mut s = session.lock().expect("session lock poisoned");
+        s.record_test_results(results.clone());
+    }
+
+    Ok(results.into())
+}
