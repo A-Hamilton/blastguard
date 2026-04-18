@@ -5,8 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
+
 use crate::graph::types::CodeGraph;
-use crate::parse::detect_language;
+use crate::parse::{detect_language, Language};
 use crate::Result;
 
 /// Walk `project_root` respecting `.gitignore`, returning only files that
@@ -28,14 +30,56 @@ pub fn walk_project(project_root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Cold-index a project from scratch. Ignores the cache.
+/// Cold-index a project from scratch. Ignores any existing cache.
+///
+/// Walks the project respecting `.gitignore`, dispatches parsing across rayon
+/// workers (each worker uses its own thread-local tree-sitter parser), and
+/// assembles a fresh [`CodeGraph`]. Target: under 3s for 10K files.
 ///
 /// # Errors
-/// Surfaces I/O errors encountered while walking or reading source files.
+/// Surfaces unreadable files as logged warnings rather than failing the whole
+/// index. A file that tree-sitter cannot parse at all is returned as
+/// [`ParseOutput::default`] with `partial_parse = true` and contributes no
+/// symbols.
 #[must_use = "cold index result should be used or persisted"]
-pub fn cold_index(_project_root: &Path) -> Result<CodeGraph> {
-    // TODO(phase-1.4): walk with `ignore`, hash with BLAKE3, parse with rayon.
-    Ok(CodeGraph::new())
+pub fn cold_index(project_root: &Path) -> Result<CodeGraph> {
+    let files = walk_project(project_root);
+
+    let parses: Vec<crate::parse::ParseOutput> = files
+        .par_iter()
+        .filter_map(|path| match std::fs::read_to_string(path) {
+            Ok(source) => {
+                let lang = detect_language(path)?;
+                let out = match lang {
+                    Language::TypeScript => crate::parse::typescript::extract(path, &source),
+                    Language::JavaScript => crate::parse::javascript::extract(path, &source),
+                    Language::Python => crate::parse::python::extract(path, &source),
+                    Language::Rust => crate::parse::rust::extract(path, &source),
+                };
+                Some(out)
+            }
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "skipping file — read error during cold index"
+                );
+                None
+            }
+        })
+        .collect();
+
+    let mut graph = CodeGraph::new();
+    for out in parses {
+        for sym in out.symbols {
+            graph.insert_symbol(sym);
+        }
+        for edge in out.edges {
+            graph.insert_edge(edge);
+        }
+        graph.library_imports.extend(out.library_imports);
+    }
+    Ok(graph)
 }
 
 /// Warm-start: load the cache, compute current hashes in parallel, skip
@@ -54,6 +98,75 @@ pub fn warm_start(_project_root: &Path) -> Result<CodeGraph> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn cold_index_extracts_symbols_across_ts_py_rs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(
+            tmp.path().join("src/a.ts"),
+            "export function foo() { return 1; }",
+        )
+        .expect("write");
+        std::fs::write(
+            tmp.path().join("src/b.py"),
+            "def bar():\n    return 1\n",
+        )
+        .expect("write");
+        std::fs::write(
+            tmp.path().join("src/c.rs"),
+            "pub fn baz() -> i32 { 1 }",
+        )
+        .expect("write");
+
+        let graph = cold_index(tmp.path()).expect("cold_index");
+        assert!(
+            graph.symbols.keys().any(|id| id.name == "foo"),
+            "missing foo; symbols: {:?}",
+            graph.symbols.keys().map(|k| &k.name).collect::<Vec<_>>()
+        );
+        assert!(graph.symbols.keys().any(|id| id.name == "bar"));
+        assert!(graph.symbols.keys().any(|id| id.name == "baz"));
+    }
+
+    #[test]
+    fn cold_index_respects_gitignore() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Need a git init for .gitignore to activate — mirror walk_project tests.
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(tmp.path())
+            .status()
+            .expect("git init");
+        std::fs::write(tmp.path().join(".gitignore"), "vendor/\n").expect("gitignore");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir src");
+        std::fs::create_dir_all(tmp.path().join("vendor")).expect("mkdir vendor");
+        std::fs::write(
+            tmp.path().join("src/a.ts"),
+            "export function included() {}",
+        )
+        .expect("write");
+        std::fs::write(
+            tmp.path().join("vendor/skipped.ts"),
+            "export function excluded() {}",
+        )
+        .expect("write");
+
+        let graph = cold_index(tmp.path()).expect("cold_index");
+        assert!(graph.symbols.keys().any(|id| id.name == "included"));
+        assert!(
+            !graph.symbols.keys().any(|id| id.name == "excluded"),
+            "vendor/ should be gitignore'd"
+        );
+    }
+
+    #[test]
+    fn cold_index_empty_project_returns_empty_graph() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let graph = cold_index(tmp.path()).expect("cold_index");
+        assert!(graph.symbols.is_empty());
+        assert!(graph.library_imports.is_empty());
+    }
 
     fn mk(dir: &std::path::Path, files: &[&str]) {
         for rel in files {
