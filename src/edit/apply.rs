@@ -118,13 +118,75 @@ fn find_match_lines(body: &str, needle: &str) -> Vec<u32> {
 /// Panics only if the `graph` or `session` mutex has been poisoned by a
 /// previous thread panic, which is a fatal condition in this server.
 #[allow(clippy::too_many_lines)]
+// `project_root` is forwarded to the recursive call for create_file and will
+// be used by Phase 2's import-resolver; the recursion-only lint is a false
+// positive here.
+#[allow(clippy::only_used_in_recursion)]
 pub fn orchestrate(
     graph: &Mutex<CodeGraph>,
     session: &Mutex<SessionState>,
-    _project_root: &Path,
+    project_root: &Path,
     request: &ApplyChangeRequest,
 ) -> Result<ApplyChangeResponse> {
     let file = request.file.clone();
+
+    // Fast-path: create_file — write the file fresh and reparse.
+    if request.create_file {
+        if let Some(parent) = request.file.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| BlastGuardError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        let content = request
+            .changes
+            .first()
+            .map(|c| c.new_text.clone())
+            .unwrap_or_default();
+        std::fs::write(&request.file, &content).map_err(|source| BlastGuardError::Io {
+            path: request.file.clone(),
+            source,
+        })?;
+        // Recurse with create_file=false and empty changes so the normal
+        // reparse/diff path runs against the freshly written file. Override
+        // status to `Created` on the way out.
+        let inner = ApplyChangeRequest {
+            file: request.file.clone(),
+            changes: Vec::new(),
+            create_file: false,
+            delete_file: false,
+        };
+        let mut resp = orchestrate(graph, session, project_root, &inner)?;
+        resp.status = ApplyStatus::Created;
+        resp.summary = format!(
+            "Created {}. {}.",
+            request.file.display(),
+            summary_line(&resp.warnings)
+        );
+        return Ok(resp);
+    }
+
+    // Fast-path: delete_file — drop from disk and from graph.
+    if request.delete_file {
+        std::fs::remove_file(&request.file).map_err(|source| BlastGuardError::Io {
+            path: request.file.clone(),
+            source,
+        })?;
+        {
+            let mut g = graph.lock().expect("graph lock poisoned");
+            g.remove_file(&request.file);
+        }
+        {
+            let mut s = session.lock().expect("session lock poisoned");
+            s.record_file_edit(&request.file);
+        }
+        return Ok(ApplyChangeResponse {
+            status: ApplyStatus::Deleted,
+            summary: format!("Deleted {}", request.file.display()),
+            warnings: Vec::new(),
+            context: BundledContext::default(),
+        });
+    }
 
     // 1. Snapshot pre-edit symbols.
     let pre_edit_symbols: Vec<Symbol> = {
@@ -337,5 +399,79 @@ mod tests {
             }
             e => panic!("wrong variant: {e:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::*;
+    use crate::edit::request::{ApplyChangeRequest, ApplyStatus, Change};
+    use crate::graph::types::{CodeGraph, Symbol, SymbolId, SymbolKind, Visibility};
+    use crate::session::SessionState;
+    use std::sync::Mutex;
+
+    #[test]
+    fn create_file_writes_new_file_with_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("src/new.ts");
+        let graph = Mutex::new(CodeGraph::new());
+        let session = Mutex::new(SessionState::new());
+
+        let req = ApplyChangeRequest {
+            file: file.clone(),
+            changes: vec![Change {
+                old_text: String::new(),
+                new_text: "export function fresh() {}\n".to_string(),
+            }],
+            create_file: true,
+            delete_file: false,
+        };
+
+        let resp = orchestrate(&graph, &session, tmp.path(), &req).expect("create");
+        assert_eq!(resp.status, ApplyStatus::Created);
+        assert!(file.is_file(), "file should exist");
+        let content = std::fs::read_to_string(&file).expect("read");
+        assert!(content.contains("fresh"));
+    }
+
+    #[test]
+    fn delete_file_removes_disk_and_graph_entries() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("src/gone.ts");
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&file, "export function doomed() {}\n").expect("write");
+
+        let mut g = CodeGraph::new();
+        g.insert_symbol(Symbol {
+            id: SymbolId {
+                file: file.clone(),
+                name: "doomed".into(),
+                kind: SymbolKind::Function,
+            },
+            line_start: 1,
+            line_end: 1,
+            signature: "doomed()".into(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Export,
+            body_hash: 0,
+            is_async: false,
+            embedding_id: None,
+        });
+        let graph = Mutex::new(g);
+        let session = Mutex::new(SessionState::new());
+
+        let req = ApplyChangeRequest {
+            file: file.clone(),
+            changes: Vec::new(),
+            create_file: false,
+            delete_file: true,
+        };
+
+        let resp = orchestrate(&graph, &session, tmp.path(), &req).expect("delete");
+        assert_eq!(resp.status, ApplyStatus::Deleted);
+        assert!(!file.exists(), "file should be gone");
+        let g = graph.lock().expect("lock");
+        assert!(!g.file_symbols.contains_key(&file));
     }
 }
