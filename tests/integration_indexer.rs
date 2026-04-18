@@ -25,9 +25,11 @@ fn indexes_mixed_language_fixture() {
 
     // Intra-file call edges (Rust driver): start -> helper
     assert!(
-        graph.forward_edges.values().flatten().any(|e|
-            e.from.name == "start" && e.to.name == "helper"
-        ),
+        graph
+            .forward_edges
+            .values()
+            .flatten()
+            .any(|e| e.from.name == "start" && e.to.name == "helper"),
         "expected intra-file call edge start -> helper"
     );
 }

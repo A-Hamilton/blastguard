@@ -14,7 +14,8 @@ fn cargo_test_run_end_to_end() {
     std::fs::write(
         tmp.path().join("Cargo.toml"),
         "[package]\nname = \"bg_test_fixture\"\nversion = \"0.0.1\"\nedition = \"2021\"\n",
-    ).expect("write Cargo.toml");
+    )
+    .expect("write Cargo.toml");
     std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
     std::fs::write(
         tmp.path().join("src/lib.rs"),
@@ -29,7 +30,8 @@ fn cargo_test_run_end_to_end() {
              #[test]\n\
              fn will_fail() { assert_eq!(add(1, 1), 3); }\n\
          }\n",
-    ).expect("write lib.rs");
+    )
+    .expect("write lib.rs");
 
     let graph = Mutex::new(CodeGraph::new());
     let session = Mutex::new(SessionState::new());
@@ -59,6 +61,9 @@ fn cargo_test_run_end_to_end() {
 
     assert_eq!(resp.passed, 2, "passed mismatch: {resp:?}");
     assert_eq!(resp.failed, 1, "failed mismatch: {resp:?}");
-    assert!(resp.failures.iter().any(|f| f.contains("will_fail")),
-        "expected will_fail in failures; got {:?}", resp.failures);
+    assert!(
+        resp.failures.iter().any(|f| f.contains("will_fail")),
+        "expected will_fail in failures; got {:?}",
+        resp.failures
+    );
 }

@@ -162,10 +162,7 @@ impl CodeGraph {
             .entry(from)
             .or_default()
             .push(edge.clone());
-        self.reverse_edges
-            .entry(to.clone())
-            .or_default()
-            .push(edge);
+        self.reverse_edges.entry(to.clone()).or_default().push(edge);
         *self.centrality.entry(to).or_insert(0) += 1;
     }
 
@@ -274,7 +271,11 @@ mod tests {
         assert!(!g.symbols.contains_key(&dst.id));
         assert!(!g.reverse_edges.contains_key(&dst.id));
         let src_fwd = g.forward_edges.get(&src.id).expect("caller forward edges");
-        assert_eq!(src_fwd.len(), 1, "caller's forward edge to deleted callee must be kept");
+        assert_eq!(
+            src_fwd.len(),
+            1,
+            "caller's forward edge to deleted callee must be kept"
+        );
         assert_eq!(src_fwd[0].to, dst.id);
     }
 

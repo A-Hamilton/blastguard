@@ -89,8 +89,7 @@ fn re(pattern: &'static str) -> &'static Regex {
     static CACHE: OnceLock<
         std::sync::Mutex<std::collections::HashMap<&'static str, &'static Regex>>,
     > = OnceLock::new();
-    let map =
-        CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let map = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     // SAFETY: mutex poisoning only occurs if our own code already panicked,
     // which is an unrecoverable state. `expect` is intentional here.
     #[allow(clippy::significant_drop_in_scrutinee)]
@@ -100,8 +99,9 @@ fn re(pattern: &'static str) -> &'static Regex {
     }
     // Hardcoded patterns are validated at author-time; any compile failure is
     // a source-code bug, so `expect` is intentional.
-    let leaked: &'static Regex =
-        Box::leak(Box::new(Regex::new(pattern).expect("hardcoded regex compiles")));
+    let leaked: &'static Regex = Box::leak(Box::new(
+        Regex::new(pattern).expect("hardcoded regex compiles"),
+    ));
     guard.insert(pattern, leaked);
     leaked
 }
@@ -128,10 +128,7 @@ mod tests {
 
     #[test]
     fn callees_of_pattern() {
-        assert_eq!(
-            classify("callees of foo"),
-            QueryKind::Callees("foo".into())
-        );
+        assert_eq!(classify("callees of foo"), QueryKind::Callees("foo".into()));
     }
 
     #[test]

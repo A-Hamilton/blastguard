@@ -29,7 +29,10 @@ fn parse_jest(stdout: &[u8]) -> TestResults {
     let v: Value = serde_json::from_slice(stdout).unwrap_or(Value::Null);
     let passed = v.get("numPassedTests").and_then(Value::as_u64).unwrap_or(0);
     let failed = v.get("numFailedTests").and_then(Value::as_u64).unwrap_or(0);
-    let skipped = v.get("numPendingTests").and_then(Value::as_u64).unwrap_or(0);
+    let skipped = v
+        .get("numPendingTests")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
 
     let mut failures = Vec::new();
     if let Some(test_results) = v.get("testResults").and_then(Value::as_array) {
@@ -171,7 +174,10 @@ fn parse_cargo(stdout: &[u8]) -> TestResults {
         let Ok(v): std::result::Result<Value, _> = serde_json::from_str(line) else {
             continue;
         };
-        match (v.get("type").and_then(Value::as_str), v.get("event").and_then(Value::as_str)) {
+        match (
+            v.get("type").and_then(Value::as_str),
+            v.get("event").and_then(Value::as_str),
+        ) {
             (Some("test"), Some("ok")) => passed += 1,
             (Some("test"), Some("failed")) => {
                 failed += 1;
@@ -362,7 +368,10 @@ mod tests {
         let r = parse_jest(&fixture("jest_failing.json"));
         let f = &r.failures[0];
         assert!(!f.stack.is_empty(), "stack should have frames");
-        assert!(f.stack.iter().any(|(p, _)| p.to_string_lossy().contains("handler.js")));
+        assert!(f
+            .stack
+            .iter()
+            .any(|(p, _)| p.to_string_lossy().contains("handler.js")));
     }
 
     #[test]

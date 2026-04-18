@@ -30,7 +30,11 @@ pub fn build_command(runner: Runner, project_root: &Path, filter: Option<&str>) 
         }
         Runner::Pytest => {
             let mut c = Command::new("python");
-            c.arg("-m").arg("pytest").arg("--tb=short").arg("-q").arg("--json-report");
+            c.arg("-m")
+                .arg("pytest")
+                .arg("--tb=short")
+                .arg("-q")
+                .arg("--json-report");
             c
         }
         Runner::CargoTest => {
@@ -148,7 +152,10 @@ mod tests {
     #[test]
     fn jest_command_has_json_reporter() {
         let cmd = build_command(Runner::Jest, Path::new("."), None);
-        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
         assert!(args.iter().any(|a| a == "--json"));
     }
 
@@ -221,7 +228,8 @@ mod tests {
         let mut cmd = Command::new("sleep");
         cmd.arg("5");
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let result = run(cmd, Duration::from_millis(200)).expect("run should return Ok with timed_out=true");
+        let result =
+            run(cmd, Duration::from_millis(200)).expect("run should return Ok with timed_out=true");
         assert!(result.timed_out, "expected timed_out=true, got {result:?}");
         assert!(result.stdout.is_empty());
         assert!(result.exit_code.is_none());

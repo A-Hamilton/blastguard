@@ -14,15 +14,14 @@ async fn watcher_reindexes_on_new_file() {
     std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
 
     let graph = Arc::new(Mutex::new(CodeGraph::new()));
-    let handle = spawn_watcher(tmp.path().to_path_buf(), Arc::clone(&graph))
-        .expect("spawn watcher");
+    let handle =
+        spawn_watcher(tmp.path().to_path_buf(), Arc::clone(&graph)).expect("spawn watcher");
 
     // Give the watcher a moment to settle before writing.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let file = tmp.path().join("src/new.ts");
-    std::fs::write(&file, "export function freshSymbol() { return 1; }\n")
-        .expect("write");
+    std::fs::write(&file, "export function freshSymbol() { return 1; }\n").expect("write");
 
     // Poll for up to 3s for the symbol to appear (btrfs/tmpfs can be slow).
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
@@ -57,18 +56,19 @@ async fn watcher_drops_symbols_on_file_delete() {
 
     // Prime the graph manually so we don't race the watcher on the initial write.
     let mut initial = CodeGraph::new();
-    let parsed = blastguard::parse::typescript::extract(
-        &file,
-        "export function doomed() {}\n",
-    );
+    let parsed = blastguard::parse::typescript::extract(&file, "export function doomed() {}\n");
     for s in parsed.symbols {
         initial.insert_symbol(s);
     }
     let graph = Arc::new(Mutex::new(initial));
-    assert!(graph.lock().unwrap().symbols.keys().any(|id| id.name == "doomed"));
+    assert!(graph
+        .lock()
+        .unwrap()
+        .symbols
+        .keys()
+        .any(|id| id.name == "doomed"));
 
-    let handle = spawn_watcher(tmp.path().to_path_buf(), Arc::clone(&graph))
-        .expect("spawn");
+    let handle = spawn_watcher(tmp.path().to_path_buf(), Arc::clone(&graph)).expect("spawn");
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     std::fs::remove_file(&file).expect("unlink");

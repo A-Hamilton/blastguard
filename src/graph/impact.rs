@@ -122,7 +122,11 @@ pub fn detect_async_change(graph: &CodeGraph, old: &Symbol, new: &Symbol) -> Opt
         return None;
     }
     let caller_ids = find_callers_by_name(graph, new);
-    let direction = if new.is_async { "sync→async" } else { "async→sync" };
+    let direction = if new.is_async {
+        "sync→async"
+    } else {
+        "async→sync"
+    };
     let total = caller_ids.len();
     let body = format!(
         "{}() {}. {} caller{} need{} update.",
@@ -181,10 +185,7 @@ pub fn summary_line(warnings: &[Warning]) -> String {
     for w in warnings {
         *counts.entry(w.kind.tag()).or_insert(0) += 1;
     }
-    let parts: Vec<String> = counts
-        .iter()
-        .map(|(tag, n)| format!("{n} {tag}"))
-        .collect();
+    let parts: Vec<String> = counts.iter().map(|(tag, n)| format!("{n} {tag}")).collect();
     format!("{} warnings: {}", warnings.len(), parts.join(", "))
 }
 
@@ -222,7 +223,11 @@ pub fn detect_interface_break(graph: &CodeGraph, old: &Symbol, new: &Symbol) -> 
         if total == 1 { "" } else { "s" },
         shown.join(", ")
     );
-    Some(Warning::new(WarningKind::InterfaceBreak, new.id.clone(), body))
+    Some(Warning::new(
+        WarningKind::InterfaceBreak,
+        new.id.clone(),
+        body,
+    ))
 }
 
 #[cfg(test)]
@@ -231,10 +236,22 @@ mod tests {
 
     #[test]
     fn warning_kind_serialises_as_screaming_snake() {
-        assert_eq!(serde_json::to_string(&WarningKind::Signature).unwrap(), "\"SIGNATURE\"");
-        assert_eq!(serde_json::to_string(&WarningKind::AsyncChange).unwrap(), "\"ASYNC_CHANGE\"");
-        assert_eq!(serde_json::to_string(&WarningKind::Orphan).unwrap(), "\"ORPHAN\"");
-        assert_eq!(serde_json::to_string(&WarningKind::InterfaceBreak).unwrap(), "\"INTERFACE_BREAK\"");
+        assert_eq!(
+            serde_json::to_string(&WarningKind::Signature).unwrap(),
+            "\"SIGNATURE\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WarningKind::AsyncChange).unwrap(),
+            "\"ASYNC_CHANGE\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WarningKind::Orphan).unwrap(),
+            "\"ORPHAN\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WarningKind::InterfaceBreak).unwrap(),
+            "\"INTERFACE_BREAK\""
+        );
     }
 
     #[test]
@@ -342,7 +359,11 @@ mod detector_tests {
 
         let warning = detect_signature(&g, &old, &new).expect("should fire");
         assert_eq!(warning.kind, WarningKind::Signature);
-        assert!(warning.body.contains("processRequest"), "body={}", warning.body);
+        assert!(
+            warning.body.contains("processRequest"),
+            "body={}",
+            warning.body
+        );
         assert!(warning.body.contains("2 callers"), "body={}", warning.body);
         assert!(warning.body.contains("api.ts") || warning.body.contains("admin.ts"));
     }

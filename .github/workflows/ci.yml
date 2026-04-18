@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  rust:
+    name: Rust — fmt / clippy / test / build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install jq (for hook tests)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (pedantic, warnings = error)
+        run: cargo clippy --all-targets -- -W clippy::pedantic -D warnings
+
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Release build
+        run: cargo build --release
+
+      - name: Hook smoke tests
+        run: |
+          # Structural grep → hook emits JSON
+          out=$(echo '{"tool_name":"Grep","tool_input":{"pattern":"fn processRequest"}}' | \
+            integrations/claude-code/hooks/bg-pretool-grep.sh)
+          echo "$out" | jq -e '.hookSpecificOutput.additionalContext | contains("blastguard")' > /dev/null
+
+          # Plain-text grep → hook silent
+          out=$(echo '{"tool_name":"Grep","tool_input":{"pattern":"hello world"}}' | \
+            integrations/claude-code/hooks/bg-pretool-grep.sh)
+          test -z "$out" || { echo "expected silent output, got: $out"; exit 1; }
+
+          # Source-file edit → hook emits JSON
+          out=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"src/handler.ts"}}' | \
+            integrations/claude-code/hooks/bg-pretool-edit.sh)
+          echo "$out" | jq -e '.hookSpecificOutput.additionalContext | contains("apply_change")' > /dev/null
+
+          # Non-source edit → hook silent
+          out=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"README.md"}}' | \
+            integrations/claude-code/hooks/bg-pretool-edit.sh)
+          test -z "$out" || { echo "expected silent output, got: $out"; exit 1; }
+
+          # Test-runner bash → hook emits JSON
+          out=$(echo '{"tool_name":"Bash","tool_input":{"command":"pytest tests/"}}' | \
+            integrations/claude-code/hooks/bg-pretool-bash.sh)
+          echo "$out" | jq -e '.hookSpecificOutput.additionalContext | contains("run_tests")' > /dev/null
+
+  python-bench:
+    name: Python bench — pytest + ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bench
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: uv sync
+        run: uv sync
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: pytest
+        run: uv run pytest tests/ -v

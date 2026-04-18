@@ -113,9 +113,7 @@ pub fn hash_directory_tree(dir: &Path) -> Result<u64> {
         hasher.update(&child_hash.to_le_bytes());
     }
     Ok(u64::from_le_bytes(
-        hasher
-            .finalize()
-            .as_bytes()[..8]
+        hasher.finalize().as_bytes()[..8]
             .try_into()
             .expect("digest is always 32 bytes"),
     ))
@@ -151,9 +149,7 @@ pub fn hash_project_tree(
         hasher.update(&h.to_le_bytes());
     }
     Ok(u64::from_le_bytes(
-        hasher
-            .finalize()
-            .as_bytes()[..8]
+        hasher.finalize().as_bytes()[..8]
             .try_into()
             .expect("digest is 32 bytes"),
     ))
@@ -172,8 +168,8 @@ pub fn save(path: &Path, cache: &CacheFile) -> Result<()> {
             source,
         })?;
     }
-    let bytes = rmp_serde::to_vec(cache)
-        .map_err(|e| BlastGuardError::CacheCorrupt(e.to_string()))?;
+    let bytes =
+        rmp_serde::to_vec(cache).map_err(|e| BlastGuardError::CacheCorrupt(e.to_string()))?;
     std::fs::write(path, bytes).map_err(|source| BlastGuardError::Io {
         path: path.to_path_buf(),
         source,
@@ -196,8 +192,8 @@ pub fn load(path: &Path) -> Result<Option<CacheFile>> {
         path: path.to_path_buf(),
         source,
     })?;
-    let cache: CacheFile = rmp_serde::from_slice(&bytes)
-        .map_err(|e| BlastGuardError::CacheCorrupt(e.to_string()))?;
+    let cache: CacheFile =
+        rmp_serde::from_slice(&bytes).map_err(|e| BlastGuardError::CacheCorrupt(e.to_string()))?;
     if cache.version != CACHE_VERSION {
         tracing::info!(
             stored = cache.version,
@@ -327,7 +323,10 @@ mod tests {
         };
         save(&cache_path, &stale).expect("save");
         let loaded = load(&cache_path).expect("no-err");
-        assert!(loaded.is_none(), "stale cache should be rejected; returned {loaded:?}");
+        assert!(
+            loaded.is_none(),
+            "stale cache should be rejected; returned {loaded:?}"
+        );
     }
 
     #[test]
@@ -346,8 +345,14 @@ mod tests {
         // Non-existent .blastguard/ — save must create it.
         let cache_path = tmp.path().join(".blastguard").join("cache.bin");
         assert!(!cache_path.parent().expect("parent").exists());
-        save(&cache_path, &CacheFile { version: CACHE_VERSION, ..CacheFile::default() })
-            .expect("save creates dir");
+        save(
+            &cache_path,
+            &CacheFile {
+                version: CACHE_VERSION,
+                ..CacheFile::default()
+            },
+        )
+        .expect("save creates dir");
         assert!(cache_path.is_file());
     }
 }

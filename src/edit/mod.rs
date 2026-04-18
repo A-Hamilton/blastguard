@@ -91,13 +91,18 @@ mod orchestrator_tests {
         let resp = apply_change(&graph, &session, tmp.path(), &req).expect("apply");
         assert_eq!(resp.status, ApplyStatus::Applied);
         assert!(
-            resp.warnings.iter().any(|w| w.kind == WarningKind::Signature),
+            resp.warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::Signature),
             "expected SIGNATURE; got {:?}",
             resp.warnings
         );
         // Caller `api` is in the same file — verify context sees it.
         assert!(
-            resp.context.callers.iter().any(|c| c.contains("handler.ts")),
+            resp.context
+                .callers
+                .iter()
+                .any(|c| c.contains("handler.ts")),
             "expected handler.ts in callers; got {:?}",
             resp.context.callers
         );
@@ -107,8 +112,7 @@ mod orchestrator_tests {
     fn apply_change_returns_edit_not_found_error_for_bogus_old_text() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
-        std::fs::write(tmp.path().join("src/a.ts"), "export function foo() {}\n")
-            .expect("write");
+        std::fs::write(tmp.path().join("src/a.ts"), "export function foo() {}\n").expect("write");
 
         let graph = Mutex::new(CodeGraph::new());
         let session = Mutex::new(SessionState::new());

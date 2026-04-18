@@ -8,13 +8,13 @@
 //! remove/reinsert pair.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ignore::gitignore::Gitignore;
 use notify::RecursiveMode;
-use notify_debouncer_mini::{new_debouncer, DebouncedEvent, DebounceEventResult};
+use notify_debouncer_mini::{new_debouncer, DebounceEventResult, DebouncedEvent};
 use tokio::task::JoinHandle;
 
 use crate::graph::types::CodeGraph;
@@ -39,8 +39,7 @@ pub fn spawn_watcher(
     // as the debouncer sink and a tokio unbounded channel to carry events into
     // the async task.
     let (std_tx, std_rx) = std::sync::mpsc::channel::<DebounceEventResult>();
-    let (tokio_tx, mut tokio_rx) =
-        tokio::sync::mpsc::unbounded_channel::<Vec<DebouncedEvent>>();
+    let (tokio_tx, mut tokio_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<DebouncedEvent>>();
 
     let mut debouncer = new_debouncer(DEBOUNCE, std_tx)
         .map_err(|e| std::io::Error::other(format!("debouncer init: {e}")))?;
@@ -211,8 +210,7 @@ mod tests {
         std::fs::write(&file, "export function first() {}\n").expect("write v1");
 
         // Prime the graph via cold_index.
-        let initial_graph =
-            crate::index::indexer::cold_index(tmp.path()).expect("cold");
+        let initial_graph = crate::index::indexer::cold_index(tmp.path()).expect("cold");
         // Sanity: the initial symbol is in the graph.
         assert!(initial_graph.symbols.keys().any(|id| id.name == "first"));
         let graph = Arc::new(Mutex::new(initial_graph));
@@ -244,8 +242,7 @@ mod tests {
         let file = tmp.path().join("src/gone.ts");
         std::fs::write(&file, "export function doomed() {}\n").expect("write");
 
-        let initial_graph =
-            crate::index::indexer::cold_index(tmp.path()).expect("cold");
+        let initial_graph = crate::index::indexer::cold_index(tmp.path()).expect("cold");
         let graph = Arc::new(Mutex::new(initial_graph));
 
         // Delete the file, then fire a synthetic event.
@@ -274,8 +271,7 @@ mod tests {
     async fn relay_thread_exits_when_tokio_task_aborted() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let graph = Arc::new(Mutex::new(CodeGraph::new()));
-        let handle = spawn_watcher(tmp.path().to_path_buf(), Arc::clone(&graph))
-            .expect("spawn");
+        let handle = spawn_watcher(tmp.path().to_path_buf(), Arc::clone(&graph)).expect("spawn");
 
         // Abort the task; the relay thread should notice relay_tx is closed
         // within the 200ms poll timeout and exit cleanly.
@@ -304,7 +300,11 @@ mod filter_tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let gi = Gitignore::empty();
         assert!(!is_relevant(&tmp.path().join("README.md"), tmp.path(), &gi));
-        assert!(!is_relevant(&tmp.path().join("Cargo.toml"), tmp.path(), &gi));
+        assert!(!is_relevant(
+            &tmp.path().join("Cargo.toml"),
+            tmp.path(),
+            &gi
+        ));
     }
 
     #[test]
@@ -325,6 +325,10 @@ mod filter_tests {
     fn path_outside_root_is_filtered() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let gi = Gitignore::empty();
-        assert!(!is_relevant(Path::new("/tmp/unrelated.ts"), tmp.path(), &gi));
+        assert!(!is_relevant(
+            Path::new("/tmp/unrelated.ts"),
+            tmp.path(),
+            &gi
+        ));
     }
 }

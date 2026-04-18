@@ -141,10 +141,7 @@ fn resolve_via_tsconfig(
     spec: &str,
     tsconfig: &TsConfig,
 ) -> Option<ResolveResult> {
-    let base = tsconfig
-        .base_url
-        .as_deref()
-        .unwrap_or(Path::new("."));
+    let base = tsconfig.base_url.as_deref().unwrap_or(Path::new("."));
 
     for (pattern, targets) in &tsconfig.paths {
         if let Some(prefix) = pattern.strip_suffix('*') {
@@ -349,43 +346,40 @@ mod tests {
 
     #[test]
     fn resolves_relative_ts_file() {
-        let tmp = tempdir_with(&[
-            ("src/handler.ts", ""),
-            ("src/utils/auth.ts", ""),
-        ]);
+        let tmp = tempdir_with(&[("src/handler.ts", ""), ("src/utils/auth.ts", "")]);
         let from = tmp.path().join("src/handler.ts");
         let r = resolve_ts(tmp.path(), &from, "./utils/auth", None);
-        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/auth.ts")));
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/utils/auth.ts"))
+        );
     }
 
     #[test]
     fn resolves_tsx_extension() {
-        let tmp = tempdir_with(&[
-            ("src/app.ts", ""),
-            ("src/Button.tsx", ""),
-        ]);
+        let tmp = tempdir_with(&[("src/app.ts", ""), ("src/Button.tsx", "")]);
         let from = tmp.path().join("src/app.ts");
         let r = resolve_ts(tmp.path(), &from, "./Button", None);
-        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/Button.tsx")));
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/Button.tsx"))
+        );
     }
 
     #[test]
     fn resolves_index_file_in_directory() {
-        let tmp = tempdir_with(&[
-            ("src/handler.ts", ""),
-            ("src/utils/index.ts", ""),
-        ]);
+        let tmp = tempdir_with(&[("src/handler.ts", ""), ("src/utils/index.ts", "")]);
         let from = tmp.path().join("src/handler.ts");
         let r = resolve_ts(tmp.path(), &from, "./utils", None);
-        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/index.ts")));
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/utils/index.ts"))
+        );
     }
 
     #[test]
     fn resolves_parent_directory_import() {
-        let tmp = tempdir_with(&[
-            ("src/nested/deep.ts", ""),
-            ("src/shared.ts", ""),
-        ]);
+        let tmp = tempdir_with(&[("src/nested/deep.ts", ""), ("src/shared.ts", "")]);
         let from = tmp.path().join("src/nested/deep.ts");
         let r = resolve_ts(tmp.path(), &from, "../shared", None);
         assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/shared.ts")));
@@ -423,28 +417,22 @@ mod tests {
 
     #[test]
     fn resolves_via_tsconfig_path_alias() {
-        let tmp = tempdir_with(&[
-            ("src/handler.ts", ""),
-            ("src/shared/auth.ts", ""),
-        ]);
+        let tmp = tempdir_with(&[("src/handler.ts", ""), ("src/shared/auth.ts", "")]);
         let tc = TsConfig {
             base_url: Some(PathBuf::from(".")),
-            paths: HashMap::from([(
-                "@shared/*".to_string(),
-                vec!["src/shared/*".to_string()],
-            )]),
+            paths: HashMap::from([("@shared/*".to_string(), vec!["src/shared/*".to_string()])]),
         };
         let from = tmp.path().join("src/handler.ts");
         let r = resolve_ts(tmp.path(), &from, "@shared/auth", Some(&tc));
-        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/shared/auth.ts")));
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/shared/auth.ts"))
+        );
     }
 
     #[test]
     fn resolves_exact_tsconfig_alias_no_wildcard() {
-        let tmp = tempdir_with(&[
-            ("src/handler.ts", ""),
-            ("src/config.ts", ""),
-        ]);
+        let tmp = tempdir_with(&[("src/handler.ts", ""), ("src/config.ts", "")]);
         let tc = TsConfig {
             base_url: Some(PathBuf::from(".")),
             paths: HashMap::from([("@config".to_string(), vec!["src/config".to_string()])]),
@@ -456,32 +444,38 @@ mod tests {
 
     #[test]
     fn loads_tsconfig_from_disk() {
-        let tmp = tempdir_with(&[
-            ("tsconfig.json", r#"{
+        let tmp = tempdir_with(&[(
+            "tsconfig.json",
+            r#"{
                 "compilerOptions": {
                     "baseUrl": ".",
                     "paths": { "@shared/*": ["src/shared/*"] }
                 }
-            }"#),
-        ]);
-        let tc = load_tsconfig(tmp.path()).expect("load ok").expect("present");
+            }"#,
+        )]);
+        let tc = load_tsconfig(tmp.path())
+            .expect("load ok")
+            .expect("present");
         assert!(tc.paths.contains_key("@shared/*"));
         assert_eq!(tc.base_url, Some(PathBuf::from(".")));
     }
 
     #[test]
     fn loads_tsconfig_with_jsonc_comments() {
-        let tmp = tempdir_with(&[
-            ("tsconfig.json", r#"{
+        let tmp = tempdir_with(&[(
+            "tsconfig.json",
+            r#"{
                 // Top-level comment
                 "compilerOptions": {
                     "baseUrl": ".",
                     // inline comment
                     "paths": { "@util/*": ["src/util/*"] }
                 }
-            }"#),
-        ]);
-        let tc = load_tsconfig(tmp.path()).expect("load ok").expect("present");
+            }"#,
+        )]);
+        let tc = load_tsconfig(tmp.path())
+            .expect("load ok")
+            .expect("present");
         assert!(tc.paths.contains_key("@util/*"));
     }
 
@@ -494,9 +488,7 @@ mod tests {
 
     #[test]
     fn malformed_tsconfig_returns_err() {
-        let tmp = tempdir_with(&[
-            ("tsconfig.json", "not valid json {"),
-        ]);
+        let tmp = tempdir_with(&[("tsconfig.json", "not valid json {")]);
         let err = load_tsconfig(tmp.path()).expect_err("malformed json must error");
         let s = format!("{err}");
         assert!(
@@ -516,26 +508,26 @@ mod tests {
         ]);
         let from = tmp.path().join("src/handler.py");
         let r = resolve_py(tmp.path(), &from, "utils.auth");
-        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/auth.py")));
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/utils/auth.py"))
+        );
     }
 
     #[test]
     fn resolves_python_package_init() {
-        let tmp = tempdir_with(&[
-            ("src/handler.py", ""),
-            ("src/utils/__init__.py", ""),
-        ]);
+        let tmp = tempdir_with(&[("src/handler.py", ""), ("src/utils/__init__.py", "")]);
         let from = tmp.path().join("src/handler.py");
         let r = resolve_py(tmp.path(), &from, "utils");
-        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/__init__.py")));
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/utils/__init__.py"))
+        );
     }
 
     #[test]
     fn resolves_python_module_without_src_prefix() {
-        let tmp = tempdir_with(&[
-            ("handler.py", ""),
-            ("utils/auth.py", ""),
-        ]);
+        let tmp = tempdir_with(&[("handler.py", ""), ("utils/auth.py", "")]);
         let from = tmp.path().join("handler.py");
         let r = resolve_py(tmp.path(), &from, "utils.auth");
         assert_eq!(r, ResolveResult::Internal(tmp.path().join("utils/auth.py")));
@@ -582,26 +574,26 @@ mod tests {
         ]);
         let from = tmp.path().join("src/main.rs");
         let r = resolve_rs(tmp.path(), &from, "crate::utils::auth");
-        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/auth.rs")));
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/utils/auth.rs"))
+        );
     }
 
     #[test]
     fn resolves_rust_mod_rs_for_package() {
-        let tmp = tempdir_with(&[
-            ("src/main.rs", ""),
-            ("src/utils/mod.rs", ""),
-        ]);
+        let tmp = tempdir_with(&[("src/main.rs", ""), ("src/utils/mod.rs", "")]);
         let from = tmp.path().join("src/main.rs");
         let r = resolve_rs(tmp.path(), &from, "crate::utils");
-        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/utils/mod.rs")));
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/utils/mod.rs"))
+        );
     }
 
     #[test]
     fn resolves_rust_with_self_prefix() {
-        let tmp = tempdir_with(&[
-            ("src/a.rs", ""),
-            ("src/helper.rs", ""),
-        ]);
+        let tmp = tempdir_with(&[("src/a.rs", ""), ("src/helper.rs", "")]);
         let from = tmp.path().join("src/a.rs");
         let r = resolve_rs(tmp.path(), &from, "self::helper");
         assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/helper.rs")));

@@ -94,10 +94,7 @@ mod tests {
     #[test]
     fn diff_detects_added() {
         let old = vec![sym("foo", "foo()", 0, false)];
-        let new = vec![
-            sym("foo", "foo()", 0, false),
-            sym("bar", "bar()", 0, false),
-        ];
+        let new = vec![sym("foo", "foo()", 0, false), sym("bar", "bar()", 0, false)];
         let d = diff(&old, &new);
         assert_eq!(d.added.len(), 1);
         assert_eq!(d.added[0].id.name, "bar");
@@ -108,10 +105,7 @@ mod tests {
 
     #[test]
     fn diff_detects_removed() {
-        let old = vec![
-            sym("foo", "foo()", 0, false),
-            sym("bar", "bar()", 0, false),
-        ];
+        let old = vec![sym("foo", "foo()", 0, false), sym("bar", "bar()", 0, false)];
         let new = vec![sym("foo", "foo()", 0, false)];
         let d = diff(&old, &new);
         assert_eq!(d.removed.len(), 1);

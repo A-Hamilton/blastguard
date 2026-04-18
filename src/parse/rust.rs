@@ -107,12 +107,7 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
     })
 }
 
-fn emit_function(
-    node: tree_sitter::Node<'_>,
-    source: &str,
-    path: &Path,
-    out: &mut ParseOutput,
-) {
+fn emit_function(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &mut ParseOutput) {
     let src_bytes = source.as_bytes();
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -222,12 +217,7 @@ fn emit_simple(
 /// `"std::collections::HashMap"` or `"crate::utils::helper"`.
 /// Task 11's import resolver will rewrite `to.file` on `Imports` edges to the
 /// canonical on-disk path.
-fn emit_use(
-    path_text: &str,
-    node: tree_sitter::Node<'_>,
-    path: &Path,
-    out: &mut ParseOutput,
-) {
+fn emit_use(path_text: &str, node: tree_sitter::Node<'_>, path: &Path, out: &mut ParseOutput) {
     if path_text.is_empty() {
         return;
     }
@@ -329,10 +319,7 @@ fn emit_call(
 /// - `function_item` inside an `impl_item` ancestor (before `source_file` or
 ///   another `function_item`) → [`SymbolKind::Method`]
 /// - Otherwise → `AsyncFunction` if `async`, else `Function`.
-fn enclosing_fn(
-    mut node: tree_sitter::Node<'_>,
-    source: &str,
-) -> Option<(String, SymbolKind)> {
+fn enclosing_fn(mut node: tree_sitter::Node<'_>, source: &str) -> Option<(String, SymbolKind)> {
     while let Some(parent) = node.parent() {
         if parent.kind() == "function_item" {
             let name = parent
@@ -491,7 +478,10 @@ fn private_helper() {
             .find(|s| s.id.name == "handle")
             .expect("handle missing");
         assert_eq!(sym.id.kind, SymbolKind::Method);
-        assert!(sym.is_async, "async fn handle must set is_async even as Method");
+        assert!(
+            sym.is_async,
+            "async fn handle must set is_async even as Method"
+        );
     }
 
     #[test]
@@ -529,10 +519,7 @@ fn private_helper() {
         let has_internal = out.edges.iter().any(|e| {
             e.kind == EdgeKind::Imports
                 && e.confidence == Confidence::Unresolved
-                && e.to
-                    .file
-                    .to_string_lossy()
-                    .contains("crate::utils::helper")
+                && e.to.file.to_string_lossy().contains("crate::utils::helper")
         });
         assert!(
             has_internal,
@@ -545,9 +532,7 @@ fn private_helper() {
     fn intra_file_call_edge() {
         let out = extract(&PathBuf::from("src/handler.rs"), SAMPLE);
         let has_call = out.edges.iter().any(|e| {
-            e.kind == EdgeKind::Calls
-                && e.from.name == "handle"
-                && e.to.name == "process_request"
+            e.kind == EdgeKind::Calls && e.from.name == "handle" && e.to.name == "process_request"
         });
         assert!(
             has_call,
@@ -564,9 +549,7 @@ fn private_helper() {
             .edges
             .iter()
             .filter(|e| {
-                e.kind == EdgeKind::Calls
-                    && e.from.name == "retry"
-                    && e.to.name == "helper"
+                e.kind == EdgeKind::Calls && e.from.name == "retry" && e.to.name == "helper"
             })
             .collect();
         assert_eq!(calls.len(), 1, "expected 1 dedup'd edge, got {calls:?}");
@@ -576,9 +559,10 @@ fn private_helper() {
     fn scoped_identifier_call_emits_edge_with_final_name() {
         let src = "fn build() -> Vec<u8> { Vec::new() }";
         let out = extract(&PathBuf::from("src/a.rs"), src);
-        let has_call = out.edges.iter().any(|e| {
-            e.kind == EdgeKind::Calls && e.from.name == "build" && e.to.name == "new"
-        });
+        let has_call = out
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Calls && e.from.name == "build" && e.to.name == "new");
         assert!(
             has_call,
             "expected build -> new edge for Vec::new(); edges = {:?}",
@@ -590,9 +574,10 @@ fn private_helper() {
     fn nested_scoped_identifier_call_captures_final_segment() {
         let src = "fn x() { crate::utils::helper(); }";
         let out = extract(&PathBuf::from("src/a.rs"), src);
-        let has_call = out.edges.iter().any(|e| {
-            e.kind == EdgeKind::Calls && e.from.name == "x" && e.to.name == "helper"
-        });
+        let has_call = out
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Calls && e.from.name == "x" && e.to.name == "helper");
         assert!(
             has_call,
             "expected x -> helper edge for crate::utils::helper(); edges = {:?}",

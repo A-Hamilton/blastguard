@@ -106,12 +106,7 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
     })
 }
 
-fn emit_function(
-    node: tree_sitter::Node<'_>,
-    source: &str,
-    path: &Path,
-    out: &mut ParseOutput,
-) {
+fn emit_function(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &mut ParseOutput) {
     let src_bytes = source.as_bytes();
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -344,10 +339,7 @@ fn emit_call(
 /// `method_definition`. A call inside a *module-scope* arrow function (no named
 /// ancestor) returns `None` and is dropped, exactly like a bare module-scope
 /// call.
-fn enclosing_fn(
-    mut node: tree_sitter::Node<'_>,
-    source: &str,
-) -> Option<(String, SymbolKind)> {
+fn enclosing_fn(mut node: tree_sitter::Node<'_>, source: &str) -> Option<(String, SymbolKind)> {
     while let Some(parent) = node.parent() {
         match parent.kind() {
             "function_declaration" => {
@@ -427,17 +419,24 @@ import { helper } from "./utils/helper";
     #[test]
     fn extracts_class_and_method() {
         let out = extract(&PathBuf::from("src/user.js"), SAMPLE);
-        assert!(out.symbols.iter().any(|s| s.id.name == "UserService"
-            && s.id.kind == SymbolKind::Class));
-        assert!(out.symbols.iter().any(|s| s.id.name == "get"
-            && s.id.kind == SymbolKind::Method));
+        assert!(out
+            .symbols
+            .iter()
+            .any(|s| s.id.name == "UserService" && s.id.kind == SymbolKind::Class));
+        assert!(out
+            .symbols
+            .iter()
+            .any(|s| s.id.name == "get" && s.id.kind == SymbolKind::Method));
     }
 
     #[test]
     fn library_import_captured() {
         let out = extract(&PathBuf::from("src/user.js"), SAMPLE);
         assert!(out.library_imports.iter().any(|li| li.library == "lodash"));
-        assert!(!out.library_imports.iter().any(|li| li.library.starts_with("./")));
+        assert!(!out
+            .library_imports
+            .iter()
+            .any(|li| li.library.starts_with("./")));
     }
 
     #[test]
@@ -448,14 +447,21 @@ import { helper } from "./utils/helper";
                 && e.confidence == Confidence::Unresolved
                 && e.to.file == std::path::Path::new("./utils/helper")
         });
-        assert!(has_internal, "expected Imports edge for ./utils/helper; edges = {:?}", out.edges);
+        assert!(
+            has_internal,
+            "expected Imports edge for ./utils/helper; edges = {:?}",
+            out.edges
+        );
     }
 
     #[test]
     fn scoped_package_keeps_scope_and_name() {
         let src = r#"import { Button } from "@tanstack/react-query";"#;
         let out = extract(&PathBuf::from("src/a.js"), src);
-        assert!(out.library_imports.iter().any(|li| li.library == "@tanstack/react-query"));
+        assert!(out
+            .library_imports
+            .iter()
+            .any(|li| li.library == "@tanstack/react-query"));
     }
 
     #[test]
@@ -472,9 +478,7 @@ export function retry() {
             .edges
             .iter()
             .filter(|e| {
-                e.kind == EdgeKind::Calls
-                    && e.from.name == "retry"
-                    && e.to.name == "helper"
+                e.kind == EdgeKind::Calls && e.from.name == "retry" && e.to.name == "helper"
             })
             .collect();
         assert_eq!(calls.len(), 1, "expected 1 dedup'd edge, got {calls:?}");
@@ -491,18 +495,24 @@ export function retry() {
     fn scoped_subpath_keeps_full_scope_and_name() {
         let src = r#"import { x } from "@scope/pkg/sub";"#;
         let out = extract(&PathBuf::from("src/a.js"), src);
-        assert!(out.library_imports.iter().any(|li| li.library == "@scope/pkg"));
+        assert!(out
+            .library_imports
+            .iter()
+            .any(|li| li.library == "@scope/pkg"));
     }
 
     #[test]
     fn intra_file_call_produces_calls_edge_with_enclosing_fn() {
         let out = extract(&PathBuf::from("src/user.js"), SAMPLE);
-        let has_call = out.edges.iter().any(|e| {
-            e.kind == EdgeKind::Calls
-                && e.from.name == "get"
-                && e.to.name == "loadUser"
-        });
-        assert!(has_call, "expected get -> loadUser edge; edges = {:?}", out.edges);
+        let has_call = out
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Calls && e.from.name == "get" && e.to.name == "loadUser");
+        assert!(
+            has_call,
+            "expected get -> loadUser edge; edges = {:?}",
+            out.edges
+        );
     }
 
     #[test]
@@ -521,14 +531,22 @@ class Svc {
                 && e.from.kind == SymbolKind::Method
                 && e.to.name == "helper"
         });
-        assert!(has_call, "expected run (Method) -> helper edge; edges = {:?}", out.edges);
+        assert!(
+            has_call,
+            "expected run (Method) -> helper edge; edges = {:?}",
+            out.edges
+        );
     }
 
     #[test]
     fn top_level_call_outside_any_function_is_ignored() {
         let src = "someGlobal();\nexport function wrapper() { helper(); }\n";
         let out = extract(&PathBuf::from("src/a.js"), src);
-        let calls: Vec<_> = out.edges.iter().filter(|e| e.kind == EdgeKind::Calls).collect();
+        let calls: Vec<_> = out
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
         assert_eq!(calls.len(), 1, "got {calls:?}");
         assert_eq!(calls[0].from.name, "wrapper");
         assert_eq!(calls[0].to.name, "helper");
@@ -543,12 +561,15 @@ export function outer() {
 }
 ";
         let out = extract(&PathBuf::from("src/a.js"), src);
-        let attributed = out.edges.iter().any(|e| {
-            e.kind == EdgeKind::Calls
-                && e.from.name == "outer"
-                && e.to.name == "helper"
-        });
-        assert!(attributed, "expected helper() inside arrow to attribute to outer; edges = {:?}", out.edges);
+        let attributed = out
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Calls && e.from.name == "outer" && e.to.name == "helper");
+        assert!(
+            attributed,
+            "expected helper() inside arrow to attribute to outer; edges = {:?}",
+            out.edges
+        );
     }
 
     #[test]
@@ -556,7 +577,11 @@ export function outer() {
         let src = "const cb = () => { helper(); };";
         let out = extract(&PathBuf::from("src/a.js"), src);
         let any_call = out.edges.iter().any(|e| e.kind == EdgeKind::Calls);
-        assert!(!any_call, "module-scope arrow calls should be dropped; edges = {:?}", out.edges);
+        assert!(
+            !any_call,
+            "module-scope arrow calls should be dropped; edges = {:?}",
+            out.edges
+        );
     }
 
     const BROKEN_JS: &str = r"

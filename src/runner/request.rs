@@ -71,8 +71,7 @@ mod tests {
     #[test]
     fn request_accepts_filter_and_timeout() {
         let req: RunTestsRequest =
-            serde_json::from_str(r#"{"filter": "auth", "timeout_seconds": 30}"#)
-                .expect("parse");
+            serde_json::from_str(r#"{"filter": "auth", "timeout_seconds": 30}"#).expect("parse");
         assert_eq!(req.filter.as_deref(), Some("auth"));
         assert_eq!(req.timeout_seconds, 30);
     }

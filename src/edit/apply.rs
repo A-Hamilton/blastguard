@@ -14,9 +14,7 @@ use std::sync::Mutex;
 
 use crate::edit::context;
 use crate::edit::diff;
-use crate::edit::request::{
-    ApplyChangeRequest, ApplyChangeResponse, ApplyStatus, BundledContext,
-};
+use crate::edit::request::{ApplyChangeRequest, ApplyChangeResponse, ApplyStatus, BundledContext};
 use crate::error::{BlastGuardError, Result};
 use crate::graph::impact::{
     detect_async_change, detect_interface_break, detect_orphan, detect_signature, summary_line,
@@ -39,9 +37,7 @@ fn closest_line(body: &str, needle: &str) -> (u32, f32, String) {
         let sim = 1.0_f32 - (dist as f32 / max_len as f32);
         if sim > best_sim {
             best_sim = sim;
-            best_line = u32::try_from(idx)
-                .unwrap_or(u32::MAX)
-                .saturating_add(1);
+            best_line = u32::try_from(idx).unwrap_or(u32::MAX).saturating_add(1);
             best_fragment = line.to_string();
         }
     }
@@ -97,9 +93,7 @@ fn find_match_lines(body: &str, needle: &str) -> Vec<u32> {
     while let Some(found) = body[cursor..].find(needle) {
         let offset = cursor + found;
         let line = body[..offset].chars().filter(|&c| c == '\n').count();
-        let line_1based = u32::try_from(line)
-            .unwrap_or(u32::MAX)
-            .saturating_add(1);
+        let line_1based = u32::try_from(line).unwrap_or(u32::MAX).saturating_add(1);
         lines.push(line_1based);
         cursor = offset + needle.len().max(1);
     }
@@ -366,7 +360,10 @@ mod tests {
         let path = tmp.path().join("a.ts");
         std::fs::write(&path, "fn foo() {}").expect("write");
         let err = apply_edit(&path, "NOT_PRESENT", "x").expect_err("should error");
-        assert!(matches!(err, BlastGuardError::EditNotFound { .. }), "got {err:?}");
+        assert!(
+            matches!(err, BlastGuardError::EditNotFound { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -410,14 +407,23 @@ mod tests {
         std::fs::write(
             &path,
             "function processRequest(req) {\n    return handler(req);\n}\n",
-        ).expect("write");
+        )
+        .expect("write");
         // Caller provided the function header without the parameter.
         let err = apply_edit(&path, "function processRequest() {", "function x() {")
             .expect_err("not found");
         match err {
-            BlastGuardError::EditNotFound { line, similarity, fragment, .. } => {
+            BlastGuardError::EditNotFound {
+                line,
+                similarity,
+                fragment,
+                ..
+            } => {
                 assert_eq!(line, 1, "closest line should be the function header");
-                assert!(similarity >= 0.7, "similarity {similarity} too low for a near-miss");
+                assert!(
+                    similarity >= 0.7,
+                    "similarity {similarity} too low for a near-miss"
+                );
                 assert!(fragment.contains("processRequest"), "fragment = {fragment}");
             }
             e => panic!("wrong variant: {e:?}"),
@@ -470,8 +476,14 @@ mod flag_tests {
         let req = ApplyChangeRequest {
             file: file.clone(),
             changes: vec![
-                Change { old_text: "one".to_string(), new_text: "ONE".to_string() },
-                Change { old_text: "NOT_PRESENT".to_string(), new_text: "x".to_string() },
+                Change {
+                    old_text: "one".to_string(),
+                    new_text: "ONE".to_string(),
+                },
+                Change {
+                    old_text: "NOT_PRESENT".to_string(),
+                    new_text: "x".to_string(),
+                },
             ],
             create_file: false,
             delete_file: false,
@@ -485,8 +497,7 @@ mod flag_tests {
 
         let after = std::fs::read_to_string(&file).expect("read");
         assert_eq!(
-            after,
-            "one\ntwo\nthree\n",
+            after, "one\ntwo\nthree\n",
             "file must be rolled back to original on partial-change failure"
         );
     }

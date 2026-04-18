@@ -1,5 +1,4 @@
 /target
-Cargo.lock
 
 # BlastGuard cache (produced when binary runs against a project)
 /.blastguard/

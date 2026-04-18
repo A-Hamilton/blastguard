@@ -59,9 +59,7 @@ pub fn grep(project_root: &Path, pattern: &str) -> Vec<SearchHit> {
                 continue;
             };
             if re.is_match(&line) {
-                let lineno = u32::try_from(idx)
-                    .unwrap_or(u32::MAX)
-                    .saturating_add(1);
+                let lineno = u32::try_from(idx).unwrap_or(u32::MAX).saturating_add(1);
                 hits.push(SearchHit::grep(
                     entry.path().to_path_buf(),
                     lineno,
@@ -118,7 +116,8 @@ mod tests {
         );
         let hits = grep(tmp.path(), "processRequest");
         assert!(
-            hits.iter().all(|h| !h.file.to_string_lossy().contains("vendor")),
+            hits.iter()
+                .all(|h| !h.file.to_string_lossy().contains("vendor")),
             "vendor hits leaked: {hits:?}"
         );
     }
@@ -151,10 +150,10 @@ mod tests {
     #[test]
     fn grep_skips_hidden_dotfiles() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        seed(tmp.path(), &[
-            ("src/a.ts", "const PUBLIC = 1;"),
-            (".env", "SECRET=abc123"),
-        ]);
+        seed(
+            tmp.path(),
+            &[("src/a.ts", "const PUBLIC = 1;"), (".env", "SECRET=abc123")],
+        );
         let hits = grep(tmp.path(), "abc123");
         assert!(
             hits.is_empty(),

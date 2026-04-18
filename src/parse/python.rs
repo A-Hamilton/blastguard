@@ -107,12 +107,7 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
     })
 }
 
-fn emit_function(
-    node: tree_sitter::Node<'_>,
-    source: &str,
-    path: &Path,
-    out: &mut ParseOutput,
-) {
+fn emit_function(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &mut ParseOutput) {
     let src_bytes = source.as_bytes();
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -227,12 +222,7 @@ fn emit_simple(
 ///
 /// Task 10 re-classifies entries whose first segment resolves to a project
 /// package as internal `Imports` edges.
-fn emit_import(
-    module_path: &str,
-    node: tree_sitter::Node<'_>,
-    path: &Path,
-    out: &mut ParseOutput,
-) {
+fn emit_import(module_path: &str, node: tree_sitter::Node<'_>, path: &Path, out: &mut ParseOutput) {
     if module_path.is_empty() {
         return;
     }
@@ -319,10 +309,7 @@ fn emit_call(
 /// - `function_definition` whose ancestor chain hits `class_definition` before
 ///   `module` → `Method`
 /// - Otherwise → `Function` or `AsyncFunction` based on the `async` keyword.
-fn enclosing_fn(
-    mut node: tree_sitter::Node<'_>,
-    source: &str,
-) -> Option<(String, SymbolKind)> {
+fn enclosing_fn(mut node: tree_sitter::Node<'_>, source: &str) -> Option<(String, SymbolKind)> {
     while let Some(parent) = node.parent() {
         if parent.kind() == "function_definition" {
             let name = parent
@@ -430,7 +417,10 @@ def _private_helper():
     #[test]
     fn extracts_async_def_as_async_function() {
         let out = extract(&PathBuf::from("src/handler.py"), SAMPLE);
-        let sym = out.symbols.iter().find(|s| s.id.name == "process_request")
+        let sym = out
+            .symbols
+            .iter()
+            .find(|s| s.id.name == "process_request")
             .expect("process_request missing");
         assert_eq!(sym.id.kind, SymbolKind::AsyncFunction);
         assert!(sym.is_async);
@@ -439,17 +429,29 @@ def _private_helper():
     #[test]
     fn extracts_class_and_method() {
         let out = extract(&PathBuf::from("src/handler.py"), SAMPLE);
-        assert!(out.symbols.iter().any(|s| s.id.name == "Handler" && s.id.kind == SymbolKind::Class));
-        assert!(out.symbols.iter().any(|s| s.id.name == "handle" && s.id.kind == SymbolKind::Method));
+        assert!(out
+            .symbols
+            .iter()
+            .any(|s| s.id.name == "Handler" && s.id.kind == SymbolKind::Class));
+        assert!(out
+            .symbols
+            .iter()
+            .any(|s| s.id.name == "handle" && s.id.kind == SymbolKind::Method));
     }
 
     #[test]
     fn visibility_detected_from_underscore_prefix() {
         let out = extract(&PathBuf::from("src/handler.py"), SAMPLE);
-        let priv_sym = out.symbols.iter().find(|s| s.id.name == "_private_helper")
+        let priv_sym = out
+            .symbols
+            .iter()
+            .find(|s| s.id.name == "_private_helper")
             .expect("_private_helper missing");
         assert_eq!(priv_sym.visibility, Visibility::Private);
-        let pub_sym = out.symbols.iter().find(|s| s.id.name == "process_request")
+        let pub_sym = out
+            .symbols
+            .iter()
+            .find(|s| s.id.name == "process_request")
             .expect("process_request missing");
         assert_eq!(pub_sym.visibility, Visibility::Export);
     }
@@ -466,25 +468,31 @@ def _private_helper():
     #[test]
     fn intra_file_call_produces_calls_edge() {
         let out = extract(&PathBuf::from("src/handler.py"), SAMPLE);
-        let has_call = out.edges.iter().any(|e|
-            e.kind == EdgeKind::Calls
-                && e.from.name == "process_request"
-                && e.to.name == "handler"
+        let has_call = out.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls && e.from.name == "process_request" && e.to.name == "handler"
+        });
+        assert!(
+            has_call,
+            "expected process_request -> handler edge; edges = {:?}",
+            out.edges
         );
-        assert!(has_call, "expected process_request -> handler edge; edges = {:?}", out.edges);
     }
 
     #[test]
     fn method_call_has_method_from_kind() {
         let out = extract(&PathBuf::from("src/handler.py"), SAMPLE);
         // Handler.handle calls process_request. from.kind should be Method.
-        let has_call = out.edges.iter().any(|e|
+        let has_call = out.edges.iter().any(|e| {
             e.kind == EdgeKind::Calls
                 && e.from.name == "handle"
                 && e.from.kind == SymbolKind::Method
                 && e.to.name == "process_request"
+        });
+        assert!(
+            has_call,
+            "expected handle (Method) -> process_request edge; edges = {:?}",
+            out.edges
         );
-        assert!(has_call, "expected handle (Method) -> process_request edge; edges = {:?}", out.edges);
     }
 
     #[test]
@@ -496,11 +504,13 @@ def retry():
     helper()
 ";
         let out = extract(&PathBuf::from("src/retry.py"), src);
-        let calls: Vec<_> = out.edges.iter().filter(|e|
-            e.kind == EdgeKind::Calls
-                && e.from.name == "retry"
-                && e.to.name == "helper"
-        ).collect();
+        let calls: Vec<_> = out
+            .edges
+            .iter()
+            .filter(|e| {
+                e.kind == EdgeKind::Calls && e.from.name == "retry" && e.to.name == "helper"
+            })
+            .collect();
         assert_eq!(calls.len(), 1, "expected 1 dedup'd edge, got {calls:?}");
     }
 
@@ -533,7 +543,10 @@ class Foo:
         pass
 ";
         let out = extract(&PathBuf::from("src/foo.py"), src);
-        let sym = out.symbols.iter().find(|s| s.id.name == "__secret")
+        let sym = out
+            .symbols
+            .iter()
+            .find(|s| s.id.name == "__secret")
             .expect("__secret missing");
         assert_eq!(sym.visibility, Visibility::Private);
     }
@@ -542,7 +555,11 @@ class Foo:
     fn top_level_call_outside_any_function_is_ignored() {
         let src = "some_global()\ndef wrapper():\n    helper()\n";
         let out = extract(&PathBuf::from("src/a.py"), src);
-        let calls: Vec<_> = out.edges.iter().filter(|e| e.kind == EdgeKind::Calls).collect();
+        let calls: Vec<_> = out
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
         assert_eq!(calls.len(), 1, "got {calls:?}");
         assert_eq!(calls[0].from.name, "wrapper");
         assert_eq!(calls[0].to.name, "helper");
@@ -554,12 +571,21 @@ class Foo:
     fn nested_function_inside_method_is_not_a_method() {
         let src = "class C:\n    def m(self):\n        def inner():\n            pass\n";
         let out = extract(&PathBuf::from("src/a.py"), src);
-        let inner = out.symbols.iter().find(|s| s.id.name == "inner")
+        let inner = out
+            .symbols
+            .iter()
+            .find(|s| s.id.name == "inner")
             .expect("inner missing");
-        assert_eq!(inner.id.kind, SymbolKind::Function,
-            "nested local function should be Function, not Method");
+        assert_eq!(
+            inner.id.kind,
+            SymbolKind::Function,
+            "nested local function should be Function, not Method"
+        );
         // m itself is still a method
-        let m = out.symbols.iter().find(|s| s.id.name == "m")
+        let m = out
+            .symbols
+            .iter()
+            .find(|s| s.id.name == "m")
             .expect("m missing");
         assert_eq!(m.id.kind, SymbolKind::Method);
     }
@@ -568,18 +594,20 @@ class Foo:
     fn call_inside_nested_function_attributes_to_inner_not_outer_method() {
         let src = "class C:\n    def m(self):\n        def inner():\n            helper()\n";
         let out = extract(&PathBuf::from("src/a.py"), src);
-        let has_call = out.edges.iter().any(|e|
-            e.kind == EdgeKind::Calls
-                && e.from.name == "inner"
-                && e.to.name == "helper"
+        let has_call = out
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Calls && e.from.name == "inner" && e.to.name == "helper");
+        assert!(
+            has_call,
+            "call inside inner() should attribute to inner; edges = {:?}",
+            out.edges
         );
-        assert!(has_call, "call inside inner() should attribute to inner; edges = {:?}", out.edges);
         // Verify the wrong attribution does NOT happen
-        let wrong = out.edges.iter().any(|e|
-            e.kind == EdgeKind::Calls
-                && e.from.name == "m"
-                && e.to.name == "helper"
-        );
+        let wrong = out
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Calls && e.from.name == "m" && e.to.name == "helper");
         assert!(!wrong, "call should NOT attribute to outer method m");
     }
 
@@ -589,17 +617,22 @@ class Foo:
     fn dotted_relative_import_captured_with_stripped_library() {
         let src = "from ..utils import verify\n";
         let out = extract(&PathBuf::from("src/a.py"), src);
-        assert!(out.library_imports.iter().any(|li| li.library == "utils"),
-            "expected library='utils' (dots stripped); got {:?}", out.library_imports);
+        assert!(
+            out.library_imports.iter().any(|li| li.library == "utils"),
+            "expected library='utils' (dots stripped); got {:?}",
+            out.library_imports
+        );
     }
 
     #[test]
     fn bare_relative_import_uses_dot_sentinel() {
         let src = "from . import foo\n";
         let out = extract(&PathBuf::from("src/a.py"), src);
-        assert!(out.library_imports.iter().any(|li| li.library == "."),
+        assert!(
+            out.library_imports.iter().any(|li| li.library == "."),
             "expected library='.' sentinel for bare relative import; got {:?}",
-            out.library_imports);
+            out.library_imports
+        );
     }
 
     const BROKEN_PY: &str = r"

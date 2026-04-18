@@ -31,9 +31,6 @@ mod tests {
 
     #[test]
     fn render_without_return_type() {
-        assert_eq!(
-            render_signature("bar", "()", None),
-            "bar()"
-        );
+        assert_eq!(render_signature("bar", "()", None), "bar()");
     }
 }

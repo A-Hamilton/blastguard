@@ -16,22 +16,27 @@ pub fn annotate_failures(
     session: &SessionState,
     failures: Vec<TestFailure>,
 ) -> Vec<TestFailure> {
-    let modified_index: HashSet<&SymbolId> =
-        session.modified_symbols().iter().map(|(id, _)| id).collect();
+    let modified_index: HashSet<&SymbolId> = session
+        .modified_symbols()
+        .iter()
+        .map(|(id, _)| id)
+        .collect();
 
     failures
         .into_iter()
         .map(|mut f| {
             let mut hits: Vec<String> = Vec::new();
-            for (stack_file, stack_line) in std::iter::once((f.file.clone(), f.line))
-                .chain(f.stack.iter().cloned())
+            for (stack_file, stack_line) in
+                std::iter::once((f.file.clone(), f.line)).chain(f.stack.iter().cloned())
             {
                 if let Some(sym_ids) = graph.file_symbols.get(&stack_file) {
                     for id in sym_ids {
                         if !modified_index.contains(id) {
                             continue;
                         }
-                        let Some(sym) = graph.symbols.get(id) else { continue };
+                        let Some(sym) = graph.symbols.get(id) else {
+                            continue;
+                        };
                         if stack_line >= sym.line_start && stack_line <= sym.line_end {
                             let n = session.edits_ago(id).unwrap_or(0);
                             hits.push(format!(
@@ -147,7 +152,10 @@ mod tests {
         }];
 
         let annotated = annotate_failures(&g, &session, failures);
-        assert!(annotated[0].message.contains("1 edits ago"),
-            "got: {}", annotated[0].message);
+        assert!(
+            annotated[0].message.contains("1 edits ago"),
+            "got: {}",
+            annotated[0].message
+        );
     }
 }

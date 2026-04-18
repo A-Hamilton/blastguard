@@ -25,7 +25,8 @@ fn signature_edit_end_to_end_cascade() {
         tmp.path().join("src/handler.ts"),
         "export function processRequest(req) { return req; }\n\
          export function api() { return processRequest({}); }\n",
-    ).expect("write handler");
+    )
+    .expect("write handler");
 
     let graph = Mutex::new(cold_index(tmp.path()).expect("cold_index"));
     let session = Mutex::new(SessionState::new());
@@ -43,12 +44,17 @@ fn signature_edit_end_to_end_cascade() {
     let resp = apply_change(&graph, &session, tmp.path(), &req).expect("apply");
     assert_eq!(resp.status, ApplyStatus::Applied);
     assert!(
-        resp.warnings.iter().any(|w| w.kind == WarningKind::Signature),
+        resp.warnings
+            .iter()
+            .any(|w| w.kind == WarningKind::Signature),
         "expected SIGNATURE; got {:?}",
         resp.warnings
     );
     assert!(
-        resp.context.callers.iter().any(|c| c.contains("processRequest") || c.contains("api")),
+        resp.context
+            .callers
+            .iter()
+            .any(|c| c.contains("processRequest") || c.contains("api")),
         "expected caller in context; got {:?}",
         resp.context.callers
     );

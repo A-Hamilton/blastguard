@@ -72,11 +72,7 @@ pub fn shortest_path(graph: &CodeGraph, from: &SymbolId, to: &SymbolId) -> Optio
 /// Levenshtein ≤ 2 second). Used by the `find X` dispatcher.
 #[must_use]
 pub fn find_by_name<'g>(graph: &'g CodeGraph, name: &str) -> Vec<&'g SymbolId> {
-    let mut exact: Vec<&SymbolId> = graph
-        .symbols
-        .keys()
-        .filter(|id| id.name == name)
-        .collect();
+    let mut exact: Vec<&SymbolId> = graph.symbols.keys().filter(|id| id.name == name).collect();
     exact.sort_by_key(|id| std::cmp::Reverse(graph.centrality.get(*id).copied().unwrap_or(0)));
 
     if !exact.is_empty() {

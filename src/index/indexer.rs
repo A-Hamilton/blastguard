@@ -256,16 +256,8 @@ mod tests {
             "export function foo() { return 1; }",
         )
         .expect("write");
-        std::fs::write(
-            tmp.path().join("src/b.py"),
-            "def bar():\n    return 1\n",
-        )
-        .expect("write");
-        std::fs::write(
-            tmp.path().join("src/c.rs"),
-            "pub fn baz() -> i32 { 1 }",
-        )
-        .expect("write");
+        std::fs::write(tmp.path().join("src/b.py"), "def bar():\n    return 1\n").expect("write");
+        std::fs::write(tmp.path().join("src/c.rs"), "pub fn baz() -> i32 { 1 }").expect("write");
 
         let graph = cold_index(tmp.path()).expect("cold_index");
         assert!(
@@ -289,11 +281,8 @@ mod tests {
         std::fs::write(tmp.path().join(".gitignore"), "vendor/\n").expect("gitignore");
         std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir src");
         std::fs::create_dir_all(tmp.path().join("vendor")).expect("mkdir vendor");
-        std::fs::write(
-            tmp.path().join("src/a.ts"),
-            "export function included() {}",
-        )
-        .expect("write");
+        std::fs::write(tmp.path().join("src/a.ts"), "export function included() {}")
+            .expect("write");
         std::fs::write(
             tmp.path().join("vendor/skipped.ts"),
             "export function excluded() {}",
@@ -335,28 +324,44 @@ mod tests {
             .status()
             .expect("git init");
         fs::write(tmp.path().join(".gitignore"), "node_modules/\ntarget/\n").expect("gitignore");
-        mk(tmp.path(), &[
-            "src/a.ts",
-            "src/b.py",
-            "src/c.rs",
-            "src/d.js",
-            "node_modules/skip.ts",
-            "target/build.rs",
-            "README.md",
-            "Cargo.toml",
-        ]);
+        mk(
+            tmp.path(),
+            &[
+                "src/a.ts",
+                "src/b.py",
+                "src/c.rs",
+                "src/d.js",
+                "node_modules/skip.ts",
+                "target/build.rs",
+                "README.md",
+                "Cargo.toml",
+            ],
+        );
         let files = walk_project(tmp.path());
         let rels: Vec<std::path::PathBuf> = files
             .iter()
-            .filter_map(|f| f.strip_prefix(tmp.path()).ok().map(std::path::Path::to_path_buf))
+            .filter_map(|f| {
+                f.strip_prefix(tmp.path())
+                    .ok()
+                    .map(std::path::Path::to_path_buf)
+            })
             .collect();
-        assert!(rels.iter().any(|p| p.ends_with("a.ts")), "missing a.ts: {rels:?}");
+        assert!(
+            rels.iter().any(|p| p.ends_with("a.ts")),
+            "missing a.ts: {rels:?}"
+        );
         assert!(rels.iter().any(|p| p.ends_with("b.py")));
         assert!(rels.iter().any(|p| p.ends_with("c.rs")));
         assert!(rels.iter().any(|p| p.ends_with("d.js")));
-        assert!(!rels.iter().any(|p| p.components().any(|c| c.as_os_str() == "node_modules")),
-            "node_modules should be excluded: {rels:?}");
-        assert!(!rels.iter().any(|p| p.components().any(|c| c.as_os_str() == "target")));
+        assert!(
+            !rels
+                .iter()
+                .any(|p| p.components().any(|c| c.as_os_str() == "node_modules")),
+            "node_modules should be excluded: {rels:?}"
+        );
+        assert!(!rels
+            .iter()
+            .any(|p| p.components().any(|c| c.as_os_str() == "target")));
         assert!(!rels.iter().any(|p| p.ends_with("README.md")));
         assert!(!rels.iter().any(|p| p.ends_with("Cargo.toml")));
     }
@@ -364,10 +369,7 @@ mod tests {
     #[test]
     fn walks_nested_directories() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        mk(tmp.path(), &[
-            "src/deep/nested/x.ts",
-            "src/deep/y.py",
-        ]);
+        mk(tmp.path(), &["src/deep/nested/x.ts", "src/deep/y.py"]);
         let files = walk_project(tmp.path());
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|f| f.ends_with("x.ts")));

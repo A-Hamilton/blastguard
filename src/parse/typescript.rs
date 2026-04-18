@@ -107,12 +107,7 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
     })
 }
 
-fn emit_function(
-    node: tree_sitter::Node<'_>,
-    source: &str,
-    path: &Path,
-    out: &mut ParseOutput,
-) {
+fn emit_function(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &mut ParseOutput) {
     let src_bytes = source.as_bytes();
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -134,15 +129,13 @@ fn emit_function(
         .map(|n| n.utf8_text(src_bytes).unwrap_or("").to_owned())
         .unwrap_or_default();
 
-    let return_type = node
-        .child_by_field_name("return_type")
-        .map(|n| {
-            n.utf8_text(src_bytes)
-                .unwrap_or("")
-                .trim_start_matches(':')
-                .trim()
-                .to_owned()
-        });
+    let return_type = node.child_by_field_name("return_type").map(|n| {
+        n.utf8_text(src_bytes)
+            .unwrap_or("")
+            .trim_start_matches(':')
+            .trim()
+            .to_owned()
+    });
 
     let signature = render_signature(&name, &params_text, return_type.as_deref());
     let body_text = node.utf8_text(src_bytes).unwrap_or("");
@@ -354,10 +347,7 @@ fn emit_call(
 /// `method_definition`. A call inside a *module-scope* arrow function (no named
 /// ancestor) returns `None` and is dropped, exactly like a bare module-scope
 /// call.
-fn enclosing_fn(
-    mut node: tree_sitter::Node<'_>,
-    source: &str,
-) -> Option<(String, SymbolKind)> {
+fn enclosing_fn(mut node: tree_sitter::Node<'_>, source: &str) -> Option<(String, SymbolKind)> {
     while let Some(parent) = node.parent() {
         match parent.kind() {
             "function_declaration" => {
@@ -442,17 +432,23 @@ import { helper } from "./utils/helper";
     #[test]
     fn extracts_class_and_method() {
         let out = extract(&PathBuf::from("src/handler.ts"), SAMPLE);
-        assert!(out.symbols.iter().any(|s| s.id.name == "Handler"
-            && s.id.kind == SymbolKind::Class));
-        assert!(out.symbols.iter().any(|s| s.id.name == "handle"
-            && s.id.kind == SymbolKind::Method));
+        assert!(out
+            .symbols
+            .iter()
+            .any(|s| s.id.name == "Handler" && s.id.kind == SymbolKind::Class));
+        assert!(out
+            .symbols
+            .iter()
+            .any(|s| s.id.name == "handle" && s.id.kind == SymbolKind::Method));
     }
 
     #[test]
     fn extracts_interface() {
         let out = extract(&PathBuf::from("src/handler.ts"), SAMPLE);
-        assert!(out.symbols.iter().any(|s| s.id.name == "Greeter"
-            && s.id.kind == SymbolKind::Interface));
+        assert!(out
+            .symbols
+            .iter()
+            .any(|s| s.id.name == "Greeter" && s.id.kind == SymbolKind::Interface));
     }
 
     #[test]
@@ -461,7 +457,10 @@ import { helper } from "./utils/helper";
         assert!(out.library_imports.iter().any(|li| li.library == "lodash"));
         // `./utils/helper` is internal — Task 2 handles that path. Task 1 must
         // NOT emit it as a library_import.
-        assert!(!out.library_imports.iter().any(|li| li.library.starts_with("./")));
+        assert!(!out
+            .library_imports
+            .iter()
+            .any(|li| li.library.starts_with("./")));
     }
 
     #[test]
@@ -469,7 +468,9 @@ import { helper } from "./utils/helper";
         let src = r#"import { Button } from "@tanstack/react-query";"#;
         let out = extract(&PathBuf::from("src/a.ts"), src);
         assert!(
-            out.library_imports.iter().any(|li| li.library == "@tanstack/react-query"),
+            out.library_imports
+                .iter()
+                .any(|li| li.library == "@tanstack/react-query"),
             "expected canonical @scope/pkg library name, got {:?}",
             out.library_imports
         );
@@ -486,14 +487,20 @@ import { helper } from "./utils/helper";
     fn scoped_subpath_keeps_full_scope_and_name() {
         let src = r#"import { x } from "@scope/pkg/sub";"#;
         let out = extract(&PathBuf::from("src/a.ts"), src);
-        assert!(out.library_imports.iter().any(|li| li.library == "@scope/pkg"));
+        assert!(out
+            .library_imports
+            .iter()
+            .any(|li| li.library == "@scope/pkg"));
     }
 
     #[test]
     fn internal_import_becomes_imports_edge_not_library_import() {
         let out = extract(&PathBuf::from("src/handler.ts"), SAMPLE);
         // Library imports still contain lodash and nothing else that's relative.
-        assert!(!out.library_imports.iter().any(|li| li.library.starts_with("./")));
+        assert!(!out
+            .library_imports
+            .iter()
+            .any(|li| li.library.starts_with("./")));
 
         // An Imports edge exists for ./utils/helper with Unresolved confidence
         // (Task 8 will rewrite to.file to the canonical on-disk path).
@@ -502,7 +509,11 @@ import { helper } from "./utils/helper";
                 && e.confidence == crate::graph::types::Confidence::Unresolved
                 && e.to.file == std::path::Path::new("./utils/helper")
         });
-        assert!(has_internal, "expected Imports edge for ./utils/helper; edges = {:?}", out.edges);
+        assert!(
+            has_internal,
+            "expected Imports edge for ./utils/helper; edges = {:?}",
+            out.edges
+        );
     }
 
     #[test]
@@ -515,7 +526,11 @@ import { helper } from "./utils/helper";
                 && e.from.name == "processRequest"
                 && e.to.name == "handler"
         });
-        assert!(has_call, "expected processRequest -> handler edge; edges = {:?}", out.edges);
+        assert!(
+            has_call,
+            "expected processRequest -> handler edge; edges = {:?}",
+            out.edges
+        );
     }
 
     #[test]
@@ -527,7 +542,11 @@ import { helper } from "./utils/helper";
                 && e.from.name == "handle"
                 && e.to.name == "processRequest"
         });
-        assert!(has_call, "expected handle -> processRequest edge; edges = {:?}", out.edges);
+        assert!(
+            has_call,
+            "expected handle -> processRequest edge; edges = {:?}",
+            out.edges
+        );
     }
 
     #[test]
@@ -616,12 +635,19 @@ export function alsoGood() { return 2; }
     #[test]
     fn partial_parse_still_extracts_what_parsed() {
         let out = extract(&PathBuf::from("src/broken.ts"), BROKEN_TS);
-        assert!(out.partial_parse, "partial flag should be set on broken input");
-        assert!(out.symbols.iter().any(|s| s.id.name == "good"),
+        assert!(
+            out.partial_parse,
+            "partial flag should be set on broken input"
+        );
+        assert!(
+            out.symbols.iter().any(|s| s.id.name == "good"),
             "expected to still extract `good`; got {:?}",
-            out.symbols.iter().map(|s| &s.id.name).collect::<Vec<_>>());
-        assert!(out.symbols.iter().any(|s| s.id.name == "alsoGood"),
+            out.symbols.iter().map(|s| &s.id.name).collect::<Vec<_>>()
+        );
+        assert!(
+            out.symbols.iter().any(|s| s.id.name == "alsoGood"),
             "expected to still extract `alsoGood`; got {:?}",
-            out.symbols.iter().map(|s| &s.id.name).collect::<Vec<_>>());
+            out.symbols.iter().map(|s| &s.id.name).collect::<Vec<_>>()
+        );
     }
 }

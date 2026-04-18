@@ -88,11 +88,7 @@ mod tests {
 
     #[test]
     fn grep_hit_carries_snippet_only() {
-        let hit = SearchHit::grep(
-            PathBuf::from("a.ts"),
-            5,
-            "  const x = foo();".to_string(),
-        );
+        let hit = SearchHit::grep(PathBuf::from("a.ts"), 5, "  const x = foo();".to_string());
         assert!(hit.signature.is_none());
         assert_eq!(hit.snippet.as_deref(), Some("  const x = foo();"));
     }
