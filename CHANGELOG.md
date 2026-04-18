@@ -63,11 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Quality
 
-- 251 Rust library tests + 8 integration tests + 11 Python harness tests,
+- 251 Rust library tests + 7 integration tests + 11 Python harness tests,
   all passing.
 - `cargo clippy --all-targets -- -W clippy::pedantic -D warnings` clean.
 - `ruff check` clean on the Python harness.
-- Single binary ≈ 8.3 MB (LTO + strip).
+- Single binary approximately 8-9 MB (LTO + strip). Exact size drifts with
+  toolchain version.
 
 ### Known limitations
 

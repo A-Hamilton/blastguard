@@ -24,6 +24,13 @@ TAMPER_PATTERNS: tuple[str, ...] = (
     "conftest.py",
     "pytest.ini",
     "tox.ini",
+    # pyproject.toml can embed [tool.pytest.ini_options] — an agent rewriting
+    # that section can skip or re-select tests. The BenchJack exploit class
+    # includes this vector, so any pyproject.toml change is flagged. A smarter
+    # filter would diff the [tool.pytest*] sections only, but for SWE-bench
+    # Pro grading the agent has no reason to touch pyproject.toml at all.
+    "pyproject.toml",
+    "setup.cfg",  # also accepts [tool:pytest]
 )
 
 

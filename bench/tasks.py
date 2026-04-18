@@ -38,7 +38,22 @@ def load_tasks(limit: int | None = None) -> list[Task]:
         raise RuntimeError(
             "datasets not installed — run `uv sync` inside bench/ first"
         )
-    ds = load_dataset(SWE_BENCH_PRO_DATASET, split=SWE_BENCH_PRO_SPLIT)
+    # KNOWN_GAPS.md Gap 1: the real ScaleAI/SWE-bench_Pro dataset uses
+    # lowercase `fail_to_pass` / `pass_to_pass` keys, stores them as
+    # JSON-encoded strings (not lists), and has many more columns than the
+    # Plan 7 Task dataclass maps. Until the harness is rewritten against
+    # scaleapi/SWE-bench_Pro-os's proper evaluator, refuse to return tasks
+    # rather than produce a silently-broken result set.
+    raise RuntimeError(
+        "bench/tasks.py::load_tasks is not wired to the real "
+        "ScaleAI/SWE-bench_Pro schema yet. See bench/KNOWN_GAPS.md — "
+        "running the harness in its current state will grade ~0% for "
+        "reasons unrelated to agent skill. Fix the schema mapping and "
+        "Docker-based grading before re-enabling this loader."
+    )
+
+    # Unreachable — kept for reference when the harness is rewritten.
+    ds = load_dataset(SWE_BENCH_PRO_DATASET, split=SWE_BENCH_PRO_SPLIT)  # noqa: F841
     rows = ds if limit is None else ds.select(range(min(limit, len(ds))))
     tasks = []
     for row in rows:

@@ -215,9 +215,17 @@ pub fn orchestrate(
 
     for change in &request.changes {
         if let Err(err) = apply_edit(&file, &change.old_text, &change.new_text) {
-            // Roll back any partial writes.
-            if let Some(original) = rollback_source {
-                let _ = std::fs::write(&file, original);
+            // Roll back any partial writes. If the rollback itself fails
+            // (disk full, permission change, etc.) the file is left in a
+            // partial state — surface that clearly rather than swallowing it.
+            if let Some(ref original) = rollback_source {
+                if let Err(rb_err) = std::fs::write(&file, original) {
+                    tracing::warn!(
+                        path = %file.display(),
+                        error = %rb_err,
+                        "apply_change: rollback write failed — file may be in a partial state"
+                    );
+                }
             }
             return Err(err);
         }

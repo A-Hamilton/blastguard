@@ -22,7 +22,7 @@ It also serves `blastguard://status` as a resource — a compact one-block proje
 git clone https://github.com/A-Hamilton/blastguard.git
 cd blastguard
 cargo build --release
-# Binary lands at ./target/release/blastguard (≈ 8 MB, stripped + LTO).
+# Binary lands at ./target/release/blastguard (approximately 8-9 MB, stripped + LTO).
 ```
 
 Requires Rust 1.82+.
