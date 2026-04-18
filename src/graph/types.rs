@@ -84,12 +84,23 @@ pub enum EdgeKind {
 /// Confidence in an edge's correctness.
 ///
 /// Dynamic dispatch (Python `getattr`, JS `obj[method]()`), duck typing, and
-/// unresolved imports get [`Confidence::Inferred`]. The agent sees these with
-/// an explicit caveat in the tool response rather than us dropping them.
+/// uncertain-but-resolved imports get [`Confidence::Inferred`]. The agent sees
+/// these with an explicit caveat in the tool response rather than us dropping
+/// them.
+///
+/// [`Confidence::Unresolved`] is a distinct sentinel for edges whose `to.file`
+/// or `to.kind` is still a raw placeholder — not to be confused with "resolved
+/// but uncertain". Task 8 (import resolver) and Task 13 (cross-file call
+/// resolver) rewrite these fields and upgrade the confidence to `Certain` or
+/// `Inferred` based on the resolution outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Confidence {
     Certain,
     Inferred,
+    /// Target file or kind is a placeholder — Task 8 / Task 13 resolvers
+    /// will rewrite `to.file` / `to.kind` and upgrade to `Certain` or
+    /// `Inferred` based on the resolution outcome.
+    Unresolved,
 }
 
 /// A directed edge between two symbols.

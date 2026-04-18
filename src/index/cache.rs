@@ -12,7 +12,7 @@ use crate::graph::types::CodeGraph;
 
 /// Bump when the serialised schema changes in an incompatible way.
 /// Drop + rebuild on mismatch (SPEC §9).
-pub const CACHE_VERSION: u32 = 1;
+pub const CACHE_VERSION: u32 = 2;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CacheFile {

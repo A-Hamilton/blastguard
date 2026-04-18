@@ -6,6 +6,7 @@
 //! function/method produce `Calls` edges (intra-file only; Task 13 resolves
 //! cross-file calls).
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use streaming_iterator::StreamingIterator as _;
@@ -35,8 +36,9 @@ thread_local! {
     });
 }
 
-/// Parse a TypeScript source file and return symbols plus external library
-/// imports. Internal imports and call edges are populated in Task 2.
+/// Parse a TypeScript source file and return symbols, external library
+/// imports, internal `Imports` edges (to be resolved by Task 8), and
+/// intra-file `Calls` edges (cross-file resolution is Task 13).
 ///
 /// Returns a default `ParseOutput` with `partial_parse = true` when
 /// tree-sitter cannot produce a tree at all. When ERROR nodes are present,
@@ -67,6 +69,10 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
             partial_parse,
             ..ParseOutput::default()
         };
+        // Dedup Calls edges within this single extract() pass. Tracks
+        // (from_name, to_name) pairs so a function calling the same callee
+        // multiple times produces exactly one edge.
+        let mut seen_calls: HashSet<(String, String)> = HashSet::new();
 
         let src_bytes = source.as_bytes();
         let mut matches = cursor.matches(query, root, src_bytes);
@@ -88,7 +94,9 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
                         let literal = node.utf8_text(src_bytes).unwrap_or("");
                         emit_import(literal, node, path, &mut out);
                     }
-                    "call.callee" => emit_call(node, source, path, &mut out),
+                    "call.callee" => {
+                        emit_call(node, source, path, &mut out, &mut seen_calls);
+                    }
                     // All other captures (name helper nodes, call.site, etc.)
                     // are intentionally ignored here.
                     _ => {}
@@ -241,7 +249,7 @@ fn emit_import(
             },
             kind: EdgeKind::Imports,
             line,
-            confidence: Confidence::Inferred,
+            confidence: Confidence::Unresolved,
         });
         return;
     }
@@ -287,11 +295,15 @@ fn first_child_text_is(node: tree_sitter::Node<'_>, source: &str, needle: &str) 
 /// Emit a [`Calls`] edge when a call expression's callee lies inside a named
 /// function or method. Top-level (module-scope) calls are silently dropped —
 /// there is no meaningful `from` symbol to attribute them to.
+///
+/// `seen` tracks `(from_name, callee_name)` pairs so repeated calls to the
+/// same callee within one `extract()` pass produce exactly one edge.
 fn emit_call(
     callee_node: tree_sitter::Node<'_>,
     source: &str,
     path: &Path,
     out: &mut ParseOutput,
+    seen: &mut HashSet<(String, String)>,
 ) {
     let src_bytes = source.as_bytes();
     let Ok(callee_name) = callee_node.utf8_text(src_bytes) else {
@@ -304,6 +316,11 @@ fn emit_call(
         // Call at module scope — nothing to attribute it to.
         return;
     };
+
+    // Dedup: skip if we have already emitted this (from, to) pair.
+    if !seen.insert((from_name.clone(), callee_name.to_owned())) {
+        return;
+    }
 
     let line = u32::try_from(callee_node.start_position().row)
         .unwrap_or(u32::MAX)
@@ -318,17 +335,25 @@ fn emit_call(
         to: SymbolId {
             file: path.to_path_buf(),
             name: callee_name.to_owned(),
-            kind: SymbolKind::Function, // Callee's real kind is unknown until cross-file resolution (Task 13).
+            // Callee's real kind is a placeholder until cross-file resolution (Task 13).
+            kind: SymbolKind::Function,
         },
         kind: EdgeKind::Calls,
         line,
-        confidence: Confidence::Inferred,
+        confidence: Confidence::Unresolved,
     });
 }
 
 /// Walk up the tree-sitter ancestor chain to find the nearest enclosing named
 /// `function_declaration` or `method_definition`. Returns `None` for calls at
 /// module scope (no enclosing function).
+///
+/// **Arrow-function attribution contract:** `arrow_function` nodes are
+/// transparent — they are neither matched nor returned. A call inside an arrow
+/// body therefore bubbles up to the nearest enclosing `function_declaration` or
+/// `method_definition`. A call inside a *module-scope* arrow function (no named
+/// ancestor) returns `None` and is dropped, exactly like a bare module-scope
+/// call.
 fn enclosing_fn(
     mut node: tree_sitter::Node<'_>,
     source: &str,
@@ -470,11 +495,12 @@ import { helper } from "./utils/helper";
         // Library imports still contain lodash and nothing else that's relative.
         assert!(!out.library_imports.iter().any(|li| li.library.starts_with("./")));
 
-        // An Imports edge exists for ./utils/helper.
+        // An Imports edge exists for ./utils/helper with Unresolved confidence
+        // (Task 8 will rewrite to.file to the canonical on-disk path).
         let has_internal = out.edges.iter().any(|e| {
             e.kind == crate::graph::types::EdgeKind::Imports
-                && e.confidence == crate::graph::types::Confidence::Inferred
-                && e.to.file.to_string_lossy().contains("utils/helper")
+                && e.confidence == crate::graph::types::Confidence::Unresolved
+                && e.to.file == std::path::Path::new("./utils/helper")
         });
         assert!(has_internal, "expected Imports edge for ./utils/helper; edges = {:?}", out.edges);
     }
@@ -518,5 +544,66 @@ import { helper } from "./utils/helper";
         assert_eq!(calls.len(), 1, "got {calls:?}");
         assert_eq!(calls[0].from.name, "wrapper");
         assert_eq!(calls[0].to.name, "helper");
+    }
+
+    #[test]
+    fn repeated_calls_to_same_callee_produce_one_edge() {
+        let src = "
+export function retry() {
+    helper();
+    helper();
+    helper();
+}
+";
+        let out = extract(&PathBuf::from("src/retry.ts"), src);
+        let calls: Vec<_> = out
+            .edges
+            .iter()
+            .filter(|e| {
+                e.kind == crate::graph::types::EdgeKind::Calls
+                    && e.from.name == "retry"
+                    && e.to.name == "helper"
+            })
+            .collect();
+        assert_eq!(calls.len(), 1, "expected 1 dedup'd edge, got {calls:?}");
+    }
+
+    #[test]
+    fn call_inside_arrow_inside_named_fn_attributes_to_named_fn() {
+        // Arrow functions are transparent to call attribution: the call bubbles
+        // up to the nearest enclosing function_declaration / method_definition.
+        // Module-scope arrows drop their calls (same as bare module-scope calls).
+        let src = "
+export function outer() {
+    const retry = () => { helper(); };
+    retry();
+}
+";
+        let out = extract(&PathBuf::from("src/a.ts"), src);
+        let attributed = out.edges.iter().any(|e| {
+            e.kind == crate::graph::types::EdgeKind::Calls
+                && e.from.name == "outer"
+                && e.to.name == "helper"
+        });
+        assert!(
+            attributed,
+            "expected helper() inside arrow to attribute to outer; edges = {:?}",
+            out.edges
+        );
+    }
+
+    #[test]
+    fn call_inside_module_scope_arrow_is_dropped() {
+        let src = "const cb = () => { helper(); };";
+        let out = extract(&PathBuf::from("src/a.ts"), src);
+        let any_call = out
+            .edges
+            .iter()
+            .any(|e| e.kind == crate::graph::types::EdgeKind::Calls);
+        assert!(
+            !any_call,
+            "module-scope arrow calls should be dropped; edges = {:?}",
+            out.edges
+        );
     }
 }
