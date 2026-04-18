@@ -10,8 +10,21 @@
 //! hints; Task 4 populates [`BlastGuardError::AmbiguousEdit::lines`].
 
 use std::path::Path;
+use std::sync::Mutex;
 
+use crate::edit::context;
+use crate::edit::diff;
+use crate::edit::request::{
+    ApplyChangeRequest, ApplyChangeResponse, ApplyStatus, BundledContext,
+};
 use crate::error::{BlastGuardError, Result};
+use crate::graph::impact::{
+    detect_async_change, detect_interface_break, detect_orphan, detect_signature, summary_line,
+    Warning,
+};
+use crate::graph::types::{CodeGraph, Symbol};
+use crate::parse::{detect_language, Language};
+use crate::session::SessionState;
 
 /// Scan `body` for the line with the highest normalised-Levenshtein
 /// similarity to `needle`. Returns `(line_number_1_based, similarity_0_to_1, fragment)`.
@@ -91,6 +104,159 @@ fn find_match_lines(body: &str, needle: &str) -> Vec<u32> {
         cursor = offset + needle.len().max(1);
     }
     lines
+}
+
+/// Orchestrate `apply_change` end-to-end: apply → reparse → diff →
+/// detect → context → session.
+///
+/// # Errors
+/// Any error from [`apply_edit`] (`EditNotFound` / `AmbiguousEdit` / Io) or
+/// from subsequent file I/O bubbles up verbatim. The MCP handler in Plan
+/// 4 maps these to `CallToolResult { is_error: true, .. }`.
+///
+/// # Panics
+/// Panics only if the `graph` or `session` mutex has been poisoned by a
+/// previous thread panic, which is a fatal condition in this server.
+#[allow(clippy::too_many_lines)]
+pub fn orchestrate(
+    graph: &Mutex<CodeGraph>,
+    session: &Mutex<SessionState>,
+    _project_root: &Path,
+    request: &ApplyChangeRequest,
+) -> Result<ApplyChangeResponse> {
+    let file = request.file.clone();
+
+    // 1. Snapshot pre-edit symbols.
+    let pre_edit_symbols: Vec<Symbol> = {
+        let g = graph.lock().expect("graph lock poisoned");
+        g.file_symbols
+            .get(&file)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| g.symbols.get(id).cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    // 2. Apply each change to disk.
+    for change in &request.changes {
+        apply_edit(&file, &change.old_text, &change.new_text)?;
+    }
+
+    // 3. Reparse — if the language is not supported, edit landed but graph is unaffected.
+    let Some(language) = detect_language(&file) else {
+        return Ok(ApplyChangeResponse {
+            status: ApplyStatus::Applied,
+            summary: format!(
+                "Edited {} (no graph impact — unsupported language)",
+                file.display()
+            ),
+            warnings: Vec::new(),
+            context: BundledContext::default(),
+        });
+    };
+    let source = std::fs::read_to_string(&file).map_err(|source| BlastGuardError::Io {
+        path: file.clone(),
+        source,
+    })?;
+    let parse_out = match language {
+        Language::TypeScript => crate::parse::typescript::extract(&file, &source),
+        Language::JavaScript => crate::parse::javascript::extract(&file, &source),
+        Language::Python => crate::parse::python::extract(&file, &source),
+        Language::Rust => crate::parse::rust::extract(&file, &source),
+    };
+    let new_symbols = parse_out.symbols.clone();
+
+    // 4. Update the graph: drop old file entries, insert new.
+    {
+        let mut g = graph.lock().expect("graph lock poisoned");
+        g.remove_file(&file);
+        for sym in parse_out.symbols {
+            g.insert_symbol(sym);
+        }
+        for edge in parse_out.edges {
+            g.insert_edge(edge);
+        }
+        g.library_imports.extend(parse_out.library_imports);
+    }
+
+    // 5. Diff old symbols vs new symbols.
+    let d = diff::diff(&pre_edit_symbols, &new_symbols);
+
+    // 6. Detectors.
+    let mut warnings: Vec<Warning> = Vec::new();
+    {
+        let g = graph.lock().expect("graph lock poisoned");
+        for (old, new) in &d.modified_sig {
+            if let Some(w) = detect_signature(&g, old, new) {
+                warnings.push(w);
+            }
+            if let Some(w) = detect_async_change(&g, old, new) {
+                warnings.push(w);
+            }
+            if let Some(w) = detect_interface_break(&g, old, new) {
+                warnings.push(w);
+            }
+        }
+        for removed in &d.removed {
+            if let Some(w) = detect_orphan(&g, removed) {
+                warnings.push(w);
+            }
+        }
+    }
+
+    // 7. Context — callers + tests for modified symbols.
+    let changed_for_context: Vec<Symbol> = d
+        .modified_sig
+        .iter()
+        .map(|(_, new)| new.clone())
+        .chain(d.modified_body.iter().map(|(_, new)| new.clone()))
+        .collect();
+    let context_bundle = {
+        let g = graph.lock().expect("graph lock poisoned");
+        context::build(&g, &file, &changed_for_context)
+    };
+
+    // 8. Session state.
+    {
+        let mut s = session.lock().expect("session lock poisoned");
+        s.record_file_edit(&file);
+        for (_, new) in &d.modified_sig {
+            s.record_symbol_edit(new.id.clone());
+        }
+        for (_, new) in &d.modified_body {
+            s.record_symbol_edit(new.id.clone());
+        }
+        for removed in &d.removed {
+            s.record_symbol_edit(removed.id.clone());
+        }
+    }
+
+    // 9. Build response.
+    let status = if d.is_empty() {
+        ApplyStatus::NoOp
+    } else {
+        ApplyStatus::Applied
+    };
+    let status_word = if status == ApplyStatus::NoOp {
+        "No-op edit in"
+    } else {
+        "Modified"
+    };
+    let summary = format!(
+        "{} {}. {}.",
+        status_word,
+        file.display(),
+        summary_line(&warnings)
+    );
+
+    Ok(ApplyChangeResponse {
+        status,
+        summary,
+        warnings,
+        context: context_bundle,
+    })
 }
 
 #[cfg(test)]
