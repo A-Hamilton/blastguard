@@ -112,6 +112,19 @@ pub fn run(mut cmd: Command, timeout: Duration) -> Result<ExecuteResult> {
         }
     }
 
+    // Short-circuit on timeout: the child has already been reaped inside the
+    // loop, so wait_with_output would fail with ECHILD. Return an empty
+    // stdout/stderr marked timed_out=true.
+    if timed_out {
+        return Ok(ExecuteResult {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            exit_code: None,
+            timed_out: true,
+            duration: started.elapsed(),
+        });
+    }
+
     let output = child
         .wait_with_output()
         .map_err(|e| BlastGuardError::TestCrashed {
@@ -122,7 +135,7 @@ pub fn run(mut cmd: Command, timeout: Duration) -> Result<ExecuteResult> {
         stdout: output.stdout,
         stderr: output.stderr,
         exit_code: output.status.code(),
-        timed_out,
+        timed_out: false,
         duration: started.elapsed(),
     })
 }
@@ -208,7 +221,9 @@ mod tests {
         let mut cmd = Command::new("sleep");
         cmd.arg("5");
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let result = run(cmd, Duration::from_millis(200)).expect("run");
-        assert!(result.timed_out, "expected timed_out=true");
+        let result = run(cmd, Duration::from_millis(200)).expect("run should return Ok with timed_out=true");
+        assert!(result.timed_out, "expected timed_out=true, got {result:?}");
+        assert!(result.stdout.is_empty());
+        assert!(result.exit_code.is_none());
     }
 }

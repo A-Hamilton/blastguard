@@ -100,12 +100,9 @@ impl BlastGuardServer {
     ///
     /// # Errors
     ///
-    /// Always returns `Ok` — this handler has no fallible path in Phase 1.
-    /// Error variants are reserved for Phase 2 semantic search.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the graph `Mutex` is poisoned by a prior thread panic.
+    /// Returns `Err(CallToolResult)` only when the `spawn_blocking` join fails
+    /// (effectively unreachable in practice). Phase 1 graph/grep paths are
+    /// infallible; Phase 2 semantic search may introduce real error paths.
     #[tool(
         name = "search",
         description = "Search the codebase via AST dependency graph or regex grep. \
@@ -118,12 +115,22 @@ signatures. Free-text falls through to grep. Returns up to 30 hits.",
             open_world_hint = false
         )
     )]
-    pub fn search_tool(
+    pub async fn search_tool(
         &self,
         Parameters(req): Parameters<SearchRequest>,
     ) -> Result<Json<SearchResponse>, CallToolResult> {
-        let graph = self.graph.lock().expect("graph lock poisoned");
-        let hits = dispatch(&graph, &self.project_root, &req.query);
+        let graph = Arc::clone(&self.graph);
+        let project_root = self.project_root.clone();
+        let hits = tokio::task::spawn_blocking(move || {
+            let g = graph.lock().expect("graph lock poisoned");
+            dispatch(&g, &project_root, &req.query)
+        })
+        .await
+        .map_err(|e| {
+            to_error_result(&crate::error::BlastGuardError::Other(anyhow::anyhow!(
+                "search join error: {e}"
+            )))
+        })?;
         let lines: Vec<String> = hits
             .iter()
             .map(|h| match (&h.signature, &h.snippet) {
@@ -158,16 +165,23 @@ single-line fixes your native edit tool is fine.",
             open_world_hint = false
         )
     )]
-    pub fn apply_change_tool(
+    pub async fn apply_change_tool(
         &self,
         Parameters(req): Parameters<crate::edit::ApplyChangeRequest>,
     ) -> Result<Json<crate::edit::ApplyChangeResponse>, CallToolResult> {
-        match crate::mcp::apply_change::handle(
-            &self.graph,
-            &self.session,
-            &self.project_root,
-            &req,
-        ) {
+        let graph = Arc::clone(&self.graph);
+        let session = Arc::clone(&self.session);
+        let project_root = self.project_root.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::mcp::apply_change::handle(&graph, &session, &project_root, &req)
+        })
+        .await
+        .map_err(|e| {
+            to_error_result(&crate::error::BlastGuardError::Other(anyhow::anyhow!(
+                "apply_change join error: {e}"
+            )))
+        })?;
+        match result {
             Ok(resp) => Ok(Json(resp)),
             Err(err) => Err(to_error_result(&err)),
         }
@@ -193,16 +207,23 @@ is attribution: linking test failures to your own recent edits.",
             open_world_hint = false
         )
     )]
-    pub fn run_tests_tool(
+    pub async fn run_tests_tool(
         &self,
         Parameters(req): Parameters<crate::runner::RunTestsRequest>,
     ) -> Result<Json<crate::runner::RunTestsResponse>, CallToolResult> {
-        match crate::mcp::run_tests::handle(
-            &self.graph,
-            &self.session,
-            &self.project_root,
-            &req,
-        ) {
+        let graph = Arc::clone(&self.graph);
+        let session = Arc::clone(&self.session);
+        let project_root = self.project_root.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::mcp::run_tests::handle(&graph, &session, &project_root, &req)
+        })
+        .await
+        .map_err(|e| {
+            to_error_result(&crate::error::BlastGuardError::Other(anyhow::anyhow!(
+                "run_tests join error: {e}"
+            )))
+        })?;
+        match result {
             Ok(resp) => Ok(Json(resp)),
             Err(err) => Err(to_error_result(&err)),
         }

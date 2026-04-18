@@ -26,7 +26,7 @@ Projected lift on SWE-bench Pro: **+1 to +3 points** with realistic confidence i
 
 ## Stack (verified April 2026 — reconciled against Cargo.toml)
 
-- `rmcp` v1.5 with `["server", "transport-io", "macros", "schemars"]` + `schemars` v0.9
+- `rmcp` v1.5 with `["server", "transport-io", "macros", "schemars"]` + `schemars` v1
 - `tree-sitter` v0.24 + grammars: TS v0.23, JS v0.23, Python v0.23, Rust **v0.21** (0.22+ emits ABI 15; core 0.24 max ABI is 14 — upgrading core to 0.26+ is post-MVP)
 - `streaming-iterator` v0.1.9 (required by tree-sitter 0.24's `QueryCursor::matches` streaming API)
 - `sqlite-vec` v0.1.6+ for semantic vector search (Phase 2, feature-flagged)

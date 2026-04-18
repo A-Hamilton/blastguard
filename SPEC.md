@@ -463,7 +463,7 @@ Runs in dedicated Tokio task, updates graph under write lock.
 [dependencies]
 # Verified against crates.io on 2026-04-18 via context7 MCP.
 rmcp = { version = "1.5", features = ["server", "transport-io", "macros", "schemars"] }
-schemars = "0.9"
+schemars = "1"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -485,7 +485,7 @@ uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 toml = "0.8"
 
 # Phase 2 additions (feature-flagged)
