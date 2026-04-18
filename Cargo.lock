@@ -267,6 +267,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlite-vec",
+ "streaming-iterator",
  "strsim",
  "tempfile",
  "thiserror",

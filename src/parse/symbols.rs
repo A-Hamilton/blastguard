@@ -4,6 +4,36 @@
 //! for its own tree-sitter queries and emits [`super::ParseOutput`]. Helpers
 //! here avoid duplicating boilerplate across drivers.
 
-// TODO(phase-1.2): signature formatter that joins param tokens with commas
-// and a trailing `-> Ret` when present. Must be language-agnostic enough to
-// render inline in search results.
+/// Render a human-readable function/method signature for inline display in
+/// search results.
+///
+/// Returns `"name(params): ret"` when a return type is present,
+/// `"name(params)"` when absent.
+#[must_use]
+pub fn render_signature(name: &str, params: &str, return_type: Option<&str>) -> String {
+    match return_type {
+        Some(ret) if !ret.is_empty() => format!("{name}{params}: {ret}"),
+        _ => format!("{name}{params}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_with_return_type() {
+        assert_eq!(
+            render_signature("foo", "(x: number)", Some("string")),
+            "foo(x: number): string"
+        );
+    }
+
+    #[test]
+    fn render_without_return_type() {
+        assert_eq!(
+            render_signature("bar", "()", None),
+            "bar()"
+        );
+    }
+}

@@ -64,6 +64,7 @@ toml = "0.8"
 sqlite-vec = { version = "0.1", optional = true }
 rusqlite = { version = "0.32", optional = true }
 fastembed = { version = "5", optional = true }
+streaming-iterator = "0.1.9"
 
 [features]
 default = []
