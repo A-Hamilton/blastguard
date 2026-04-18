@@ -17,16 +17,12 @@ pub struct SessionState {
     modified_files: Vec<(PathBuf, Instant)>,
     modified_symbols: Vec<(SymbolId, Instant)>,
     last_test_results: Option<TestResults>,
-    session_start: Option<Instant>,
 }
 
 impl SessionState {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            session_start: Some(Instant::now()),
-            ..Self::default()
-        }
+        Self::default()
     }
 
     pub fn record_file_edit(&mut self, path: &Path) {
@@ -50,14 +46,6 @@ impl SessionState {
     #[must_use]
     pub fn last_test_results(&self) -> Option<&TestResults> {
         self.last_test_results.as_ref()
-    }
-
-    /// Elapsed milliseconds since the session was created, or `None` for a
-    /// default-constructed session (used by `blastguard://status` resource,
-    /// Phase 1.8).
-    #[must_use]
-    pub fn elapsed_ms(&self) -> Option<u128> {
-        self.session_start.map(|t| t.elapsed().as_millis())
     }
 
     /// Returns how many `apply_change` calls ago the given symbol was modified,

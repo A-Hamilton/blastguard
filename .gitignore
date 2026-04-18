@@ -1,12 +1,12 @@
 # Rust
-/target/
+/target
 **/*.rs.bk
 *.pdb
 
 # Cargo.lock: committed (this is a binary crate, per SPEC §17)
 
 # BlastGuard runtime artifacts
-.blastguard/
+/.blastguard
 cache.bin
 *.rmp
 
@@ -14,7 +14,7 @@ cache.bin
 .cache/blastguard/
 
 # Benchmark outputs
-bench/results/
+/bench/results
 bench/trajectories/
 *.jsonl.tmp
 
