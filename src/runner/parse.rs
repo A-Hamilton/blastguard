@@ -383,4 +383,17 @@ mod tests {
         assert_eq!(f.stack[0].0, PathBuf::from("tests/test_handler.py"));
         assert_eq!(f.stack[0].1, 23);
     }
+
+    #[test]
+    fn cargo_failing_parses_counts_and_panic_location() {
+        let r = parse_cargo(&fixture("cargo_failing.txt"));
+        assert_eq!(r.passed, 1);
+        assert_eq!(r.failed, 1);
+        assert_eq!(r.skipped, 1);
+        assert_eq!(r.failures.len(), 1);
+        let f = &r.failures[0];
+        assert_eq!(f.test_name, "foo::tests::failing");
+        assert_eq!(f.file, PathBuf::from("src/foo.rs"));
+        assert_eq!(f.line, 42);
+    }
 }
