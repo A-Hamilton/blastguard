@@ -4,7 +4,7 @@
 //! [`CodeGraph`] and renders hits via [`super::hit::SearchHit::structural`].
 
 use crate::graph::ops::{callees, callers, find_by_name, shortest_path};
-use crate::graph::types::{CodeGraph, SymbolId};
+use crate::graph::types::{CodeGraph, EdgeKind, SymbolId};
 use crate::search::hit::{sort_by_centrality, SearchHit};
 
 /// `find X` / `where is X` — centrality-ranked name lookup with fuzzy fallback.
@@ -81,6 +81,50 @@ pub fn chain_from_to(graph: &CodeGraph, from_name: &str, to_name: &str) -> Vec<S
         .filter_map(|id| graph.symbols.get(id))
         .map(SearchHit::structural)
         .collect()
+}
+
+/// `imports of FILE` — files that `file` imports (forward Imports edges).
+#[must_use]
+pub fn imports_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
+    let Some(sym_ids) = graph.file_symbols.get(file) else {
+        return Vec::new();
+    };
+    let mut hits = Vec::new();
+    for sid in sym_ids {
+        let Some(edges) = graph.forward_edges.get(sid) else {
+            continue;
+        };
+        for e in edges {
+            if e.kind == EdgeKind::Imports {
+                hits.push(SearchHit {
+                    file: e.to.file.clone(),
+                    line: e.line,
+                    signature: Some(format!("imports {}", e.to.file.display())),
+                    snippet: None,
+                });
+            }
+        }
+    }
+    hits
+}
+
+/// `importers of FILE` — files that import `file` (reverse Imports edges).
+#[must_use]
+pub fn importers_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
+    let mut hits = Vec::new();
+    for rev_edges in graph.reverse_edges.values() {
+        for e in rev_edges {
+            if e.kind == EdgeKind::Imports && e.to.file == file {
+                hits.push(SearchHit {
+                    file: e.from.file.clone(),
+                    line: e.line,
+                    signature: Some(format!("imports {}", e.to.file.display())),
+                    snippet: None,
+                });
+            }
+        }
+    }
+    hits
 }
 
 /// `outline of FILE` — all symbols declared in `file`, sorted by `line_start`.
@@ -330,5 +374,43 @@ mod tests {
         let g = CodeGraph::new();
         let hits = outline_of(&g, std::path::Path::new("nope.ts"));
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn imports_of_and_importers_of_traverse_imports_edges() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind, SymbolKind};
+        let mut g = CodeGraph::new();
+        let a_id = SymbolId {
+            file: PathBuf::from("a.ts"),
+            name: "a".to_string(),
+            kind: SymbolKind::Module,
+        };
+        let b_id = SymbolId {
+            file: PathBuf::from("b.ts"),
+            name: "b".to_string(),
+            kind: SymbolKind::Module,
+        };
+        // Insert stub modules so file_symbols is populated.
+        let mut mod_a = sym("a", "a.ts");
+        mod_a.id = a_id.clone();
+        let mut mod_b = sym("b", "b.ts");
+        mod_b.id = b_id.clone();
+        g.insert_symbol(mod_a);
+        g.insert_symbol(mod_b);
+        g.insert_edge(Edge {
+            from: a_id.clone(),
+            to: b_id.clone(),
+            kind: EdgeKind::Imports,
+            line: 1,
+            confidence: Confidence::Unresolved,
+        });
+
+        let imports = imports_of(&g, std::path::Path::new("a.ts"));
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].file, PathBuf::from("b.ts"));
+
+        let importers = importers_of(&g, std::path::Path::new("b.ts"));
+        assert_eq!(importers.len(), 1);
+        assert_eq!(importers[0].file, PathBuf::from("a.ts"));
     }
 }

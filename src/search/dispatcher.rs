@@ -25,10 +25,10 @@ pub fn dispatch(graph: &CodeGraph, _project_root: &Path, query: &str) -> Vec<Sea
         QueryKind::Callees(name) => structural::callees_of(graph, &name, DEFAULT_MAX_HITS),
         QueryKind::Outline(path) => structural::outline_of(graph, &path),
         QueryKind::Chain(from, to) => structural::chain_from_to(graph, &from, &to),
+        QueryKind::ImportsOf(path) => structural::imports_of(graph, &path),
+        QueryKind::ImportersOf(path) => structural::importers_of(graph, &path),
         // Arms below land in subsequent tasks.
         QueryKind::TestsFor(_)
-        | QueryKind::ImportsOf(_)
-        | QueryKind::ImportersOf(_)
         | QueryKind::ExportsOf(_)
         | QueryKind::Libraries
         | QueryKind::Grep(_) => Vec::new(),
