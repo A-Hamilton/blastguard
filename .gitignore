@@ -1,40 +1,9 @@
-# Rust
 /target
-**/*.rs.bk
-*.pdb
+Cargo.lock
 
-# Cargo.lock: committed (this is a binary crate, per SPEC §17)
-
-# BlastGuard runtime artifacts
-/.blastguard
-cache.bin
-*.rmp
-
-# Fastembed / embedding model cache (Phase 2)
-.cache/blastguard/
-
-# Benchmark outputs
-/bench/results
-bench/trajectories/
-*.jsonl.tmp
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Environment / secrets
-.env
-.env.*
-!.env.example
-*.key
-*.pem
-
-# Logs
-*.log
-
-# Test fixture runtime artifacts
-tests/fixtures/*/.blastguard
+# Benchmark harness
+bench/results/*.jsonl
+bench/.venv/
+bench/__pycache__/
+bench/**/__pycache__/
+bench/.pytest_cache/
