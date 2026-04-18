@@ -36,6 +36,8 @@ pub enum SymbolKind {
     Module,
     Trait,
     Struct,
+    /// Enum declaration (Rust `enum`, future language equivalents).
+    Enum,
 }
 
 /// Visibility at the module boundary. Phase 1 treats this as informational;
