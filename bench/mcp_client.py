@@ -23,6 +23,63 @@ except ImportError:  # pragma: no cover
 
 BLASTGUARD_BINARY_REL = "target/release/blastguard"
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+class BlastGuardClient:
+    """Synchronous lifecycle wrapper for the BlastGuard MCP server process.
+
+    Usage::
+
+        client = BlastGuardClient()
+        client.start()
+        ...
+        client.stop()
+
+    The underlying process is blastguard running in stdio MCP mode against
+    the project root.  The paired-arm runner only needs the process alive for
+    system-prompt biasing; actual MCP session management happens inside the
+    async agent loop when needed.
+    """
+
+    def __init__(self, project_root: Path | None = None) -> None:
+        self._root = project_root or _REPO_ROOT
+        self._proc: object | None = None  # subprocess.Popen if running
+
+    def start(self) -> None:
+        """Spawn the BlastGuard binary.  No-op if already running."""
+        if self._proc is not None:
+            return
+        import subprocess  # noqa: PLC0415
+
+        try:
+            binary = find_blastguard_binary(self._root)
+        except FileNotFoundError:
+            # Binary not built yet — continue without it; agent gets raw arm
+            # behaviour even when BlastGuard arm is requested.
+            return
+        self._proc = subprocess.Popen(  # noqa: S603
+            [str(binary), str(self._root)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def stop(self) -> None:
+        """Terminate the BlastGuard process if running."""
+        if self._proc is not None:
+            import subprocess  # noqa: PLC0415
+
+            proc = self._proc
+            self._proc = None
+            try:
+                proc.terminate()  # type: ignore[union-attr]
+                proc.wait(timeout=5)  # type: ignore[union-attr]
+            except subprocess.TimeoutExpired:
+                proc.kill()  # type: ignore[union-attr]
+            except OSError:
+                pass
+
 
 def find_blastguard_binary(repo_root: Path) -> Path:
     """Locate the compiled BlastGuard binary. Raise if missing."""

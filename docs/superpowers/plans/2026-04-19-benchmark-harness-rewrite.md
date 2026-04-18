@@ -793,12 +793,12 @@ git commit -m "bench: wrap SWE-bench_Pro-os evaluator with infra-failure guard"
 
 The existing `runner.py` runs a single arm and calls our old `grader.py`. Rewrite so each invocation runs one arm end-to-end and emits a `patches.json` that the evaluator can consume.
 
-- [ ] **Step 1: Read current runner.py**
+- [x] **Step 1: Read current runner.py**
 
 Run: `cat bench/runner.py | head -80`
 Note the public function signature and imports.
 
-- [ ] **Step 2: Replace runner.py**
+- [x] **Step 2: Replace runner.py**
 
 ```python
 """Run one arm (raw or blastguard) against the SWE-bench Pro Python subset.
@@ -944,7 +944,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 3: Update `agent_loop.run_openai_compatible` signature**
+- [x] **Step 3: Update `agent_loop.run_openai_compatible` signature**
 
 The `run_openai_compatible` function must now accept `seed: int` and return a `(patch: str, tokens: TokenCount)` tuple where `TokenCount` has fields `input`, `cached_input`, `output`, `turns`. If the current function has a different shape, extend it — don't rewrite wholesale.
 
@@ -974,7 +974,7 @@ def run_openai_compatible(
 
 The patch must be the unified diff of the workspace vs. base commit. If the existing loop doesn't produce one, compute it with `git diff` at the end of the rollout.
 
-- [ ] **Step 3a: Reinforce BG-arm system prompt with explicit tool-preference hierarchy**
+- [x] **Step 3a: Reinforce BG-arm system prompt with explicit tool-preference hierarchy**
 
 Open `bench/prompts.py` and make `build_system_prompt(arm)` return two distinct prompts. The raw arm gets the baseline SWE-bench system prompt (file exploration + patching). The BlastGuard arm gets an identical prompt **plus** an appended block that explicitly biases (not forces) BlastGuard tools. This implements the four-layer reinforcement (MCP tool descriptions + server instructions + skill + this system-prompt hierarchy).
 
@@ -1060,13 +1060,13 @@ def test_unknown_arm_raises():
 
 Verify: `cd bench && uv run pytest tests/test_prompts.py -v` → 3 pass.
 
-- [ ] **Step 4: Smoke-test with a tiny limit (dry run, no network)**
+- [x] **Step 4: Smoke-test with a tiny limit (dry run, no network)**
 
 Run: `cd bench && uv run python -m bench.runner --arm raw --limit 0 --seed 42 --budget-usd 0.10 --run-id smoke-dry --model minimax/minimax-m2.7`
 
 Expected: exit 0, `bench/results/smoke-dry/config.json` created, empty telemetry.jsonl, empty patches.json (array `[]`). No network calls since `--limit 0`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bench/runner.py bench/agent_loop.py

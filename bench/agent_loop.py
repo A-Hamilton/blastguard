@@ -9,15 +9,31 @@ The loop is deliberately simple for Phase 1:
 Providers supported:
 - Anthropic: model like `claude-opus-4-7`, `claude-sonnet-4-6`.
 - OpenAI-compatible: model like `glm-5.1` via OpenRouter (OPENROUTER_API_KEY).
+
+Public API (new paired-arm runner):
+- `TokenCount` — dataclass with `input`, `cached_input`, `output`, `turns`.
+- `run_openai_compatible(*, model, system_prompt, problem_statement,
+    mcp_client, seed)` — synchronous wrapper; returns `(patch, TokenCount)`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class TokenCount:
+    """Aggregated token usage for a single task rollout."""
+
+    input: int
+    cached_input: int
+    output: int
+    turns: int
 
 
 @dataclass
@@ -137,7 +153,7 @@ async def run_anthropic(
     return result
 
 
-async def run_openai_compatible(
+async def _run_openai_compatible_async(
     model: str,
     system: str,
     user_message: str,
@@ -242,3 +258,134 @@ async def run_openai_compatible(
             break
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Synchronous paired-arm API (used by bench/runner.py)
+# ---------------------------------------------------------------------------
+
+
+async def _extract_patch_async(workspace: str | None) -> str:
+    """Return `git diff` output from the workspace, or empty string."""
+    if not workspace:
+        return ""
+    import subprocess  # noqa: PLC0415
+
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "-C",
+        workspace,
+        "diff",
+        "HEAD",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    return stdout.decode(errors="replace")
+
+
+async def _run_paired_arm_async(
+    *,
+    model: str,
+    system_prompt: str,
+    problem_statement: str,
+    mcp_client: object | None,
+    seed: int,
+    api_key_env: str = "OPENROUTER_API_KEY",
+    base_url: str = "https://openrouter.ai/api/v1",
+) -> tuple[str, TokenCount]:
+    """Async implementation of the paired-arm rollout.
+
+    Returns (patch, TokenCount). The `mcp_client` argument is a
+    BlastGuardClient instance (blastguard arm) or None (raw arm).
+    No workspace cloning here — the MCP server is already pointed at the
+    project root by BlastGuardClient; patch extraction is delegated to the
+    agent via its DONE message convention.
+    """
+    import json as _json  # noqa: PLC0415
+
+    import openai  # noqa: PLC0415
+
+    client = openai.AsyncOpenAI(
+        api_key=os.environ[api_key_env],
+        base_url=base_url,
+    )
+
+    # Seed is passed via extra_body if the endpoint supports it.
+    extra_body: dict[str, Any] = {}
+    if seed:
+        extra_body["seed"] = seed
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": problem_statement},
+    ]
+
+    total_input = 0
+    total_cached = 0
+    total_output = 0
+    turn_count = 0
+    final_patch = ""
+
+    for _turn in range(50):
+        turn_count += 1
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=4096,
+            **({"extra_body": extra_body} if extra_body else {}),
+        )
+        usage = response.usage
+        total_input += getattr(usage, "prompt_tokens", 0) or 0
+        total_output += getattr(usage, "completion_tokens", 0) or 0
+        # OpenRouter surfaces cached tokens in prompt_tokens_details.
+        if usage and hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+            total_cached += getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+
+        choice = response.choices[0]
+        msg = choice.message
+        content_text = msg.content or ""
+        messages.append({"role": "assistant", "content": content_text})
+
+        # Stop condition: model says DONE and emits no tool calls.
+        if "DONE" in content_text.upper().split() and not msg.tool_calls:
+            # Extract patch from content if the model inlined it.
+            for line in content_text.splitlines():
+                if line.startswith("diff --git"):
+                    final_patch = content_text[content_text.index(line):]
+                    break
+            break
+
+        if choice.finish_reason == "stop" and not msg.tool_calls:
+            break
+
+    return final_patch, TokenCount(
+        input=total_input,
+        cached_input=total_cached,
+        output=total_output,
+        turns=turn_count,
+    )
+
+
+def run_openai_compatible(
+    *,
+    model: str,
+    system_prompt: str,
+    problem_statement: str,
+    mcp_client: object | None,
+    seed: int,
+) -> tuple[str, TokenCount]:
+    """Synchronous paired-arm entry point for bench/runner.py.
+
+    Runs the async implementation on a fresh event loop. Returns
+    (unified_diff_patch, TokenCount).
+    """
+    return asyncio.run(
+        _run_paired_arm_async(
+            model=model,
+            system_prompt=system_prompt,
+            problem_statement=problem_statement,
+            mcp_client=mcp_client,
+            seed=seed,
+        )
+    )
