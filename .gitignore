@@ -35,3 +35,6 @@ bench/trajectories/
 
 # Logs
 *.log
+
+# Test fixture runtime artifacts
+tests/fixtures/*/.blastguard
