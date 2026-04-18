@@ -28,49 +28,92 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export OPENROUTER_API_KEY=sk-or-...   # for GLM-5.1
 ```
 
-## Smoke run (3 tasks, ~$0.50 of Claude API)
+## Workflow (Plan 8)
+
+Prerequisites:
+- Docker daemon running (the evaluator pulls per-repo images)
+- `.env` with `OPENROUTER_API_KEY=sk-or-v1-...`
+- `bench/.evaluator/` cloned via `bash bench/scripts/clone_evaluator.sh`
+
+### 1. Paired smoke (10 tasks, ~$3-4)
+
+Gate before paying for a pilot. Validates harness end-to-end.
 
 ```bash
-cd bench
-uv run python runner.py --tasks 3 --model claude-opus-4-7 --no-blastguard \
-    --output results/baseline-smoke.jsonl
-uv run python runner.py --tasks 3 --model claude-opus-4-7 --with-blastguard \
-    --output results/blastguard-smoke.jsonl
-uv run python compare.py results/baseline-smoke.jsonl results/blastguard-smoke.jsonl
+cd /home/adam/Documents/blastguard
+
+# raw arm
+HF_HOME=/tmp/hf bench/.venv/bin/python -m bench.runner \
+  --arm raw --limit 10 --seed 42 \
+  --budget-usd 5.00 --run-id smoke-raw \
+  --model minimax/minimax-m2.7
+
+# blastguard arm — same seed, same tasks
+HF_HOME=/tmp/hf bench/.venv/bin/python -m bench.runner \
+  --arm blastguard --limit 10 --seed 42 \
+  --budget-usd 5.00 --run-id smoke-bg \
+  --model minimax/minimax-m2.7
 ```
 
-Expected output: a printed comparison block with resolution-rate delta,
-token delta, per-repo breakdown.
+### 2. Paired pilot (100 tasks, ~$38 total)
 
-## Full run (731 tasks × 2 conditions × 2 models)
-
-This is a paid operation. Estimated cost ≈ $300-500 depending on the
-model's per-task turn count. Run in the background overnight and
-commit the results to `bench/results/`:
+Raw arm ~$23 (more tokens, more turns). BlastGuard arm ~$14 (graph retrieval cuts per-task tokens ~40%).
 
 ```bash
-cd bench
+cd /home/adam/Documents/blastguard
 
-# Baseline — no BlastGuard, Claude Opus 4.7.
-uv run python runner.py --tasks 731 --model claude-opus-4-7 --no-blastguard \
-    --output results/baseline-opus-4-7.jsonl
+# raw arm — budget at expected ceiling
+HF_HOME=/tmp/hf bench/.venv/bin/python -m bench.runner \
+  --arm raw --limit 100 --seed 42 \
+  --budget-usd 30.00 --run-id pilot-raw \
+  --model minimax/minimax-m2.7
 
-# BlastGuard — Claude Opus 4.7.
-uv run python runner.py --tasks 731 --model claude-opus-4-7 --with-blastguard \
-    --output results/blastguard-opus-4-7.jsonl
-
-# Baseline — GLM-5.1.
-uv run python runner.py --tasks 731 --model glm-5.1 --provider openai --no-blastguard \
-    --output results/baseline-glm-5-1.jsonl
-
-# BlastGuard — GLM-5.1.
-uv run python runner.py --tasks 731 --model glm-5.1 --provider openai --with-blastguard \
-    --output results/blastguard-glm-5-1.jsonl
-
-# Compare per model.
-uv run python compare.py results/baseline-opus-4-7.jsonl results/blastguard-opus-4-7.jsonl
-uv run python compare.py results/baseline-glm-5-1.jsonl results/blastguard-glm-5-1.jsonl
+# blastguard arm — same seed, same tasks
+HF_HOME=/tmp/hf bench/.venv/bin/python -m bench.runner \
+  --arm blastguard --limit 100 --seed 42 \
+  --budget-usd 20.00 --run-id pilot-bg \
+  --model minimax/minimax-m2.7
 ```
+
+### 3. Grade both arms
+
+```bash
+cd /home/adam/Documents/blastguard
+
+bench/.venv/bin/python -c "
+from bench.evaluator import run_evaluator
+from pathlib import Path
+for run_id in ('pilot-raw', 'pilot-bg'):
+    rc = run_evaluator(
+        evaluator_dir=Path('bench/.evaluator'),
+        raw_sample_csv=Path('bench/.evaluator/swe_bench_pro_full.csv'),
+        patches_json=Path(f'bench/results/{run_id}/patches.json'),
+        output_dir=Path(f'bench/results/{run_id}/eval'),
+        num_workers=4,
+        timeout_seconds=3600,
+    )
+    print(f'{run_id} evaluator exit: {rc}')
+"
+```
+
+### 4. Compare with McNemar's
+
+```bash
+cd /home/adam/Documents/blastguard
+
+bench/.venv/bin/python -m bench.compare \
+  --raw-output-dir bench/results/pilot-raw/eval \
+  --blastguard-output-dir bench/results/pilot-bg/eval
+```
+
+Expected output: McNemar's p-value, per-arm scores, delta in pp, mean
+tokens per task per arm.
+
+### 5. Full run (731 tasks, ~$275 total) — gated on pilot showing ≥+1pp delta
+
+Swap `--limit 100` for `--limit 731` (or omit `--limit` entirely).
+Budgets: raw ~$180, BlastGuard ~$110. Do not run this step unless the
+pilot shows ≥+1pp delta at p < 0.05.
 
 ## Methodology
 

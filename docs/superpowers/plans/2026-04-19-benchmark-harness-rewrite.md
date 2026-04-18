@@ -1081,7 +1081,7 @@ git commit -m "bench: paired-arm runner with budget cap and patch emission"
 - Modify: `bench/compare.py`
 - Add: `bench/tests/test_compare.py` (new test — existing tests may need updating)
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Append to `bench/tests/test_compare.py`:
 
@@ -1110,12 +1110,12 @@ def test_format_report_includes_mcnemar():
     assert "blastguard_wins" in report.lower() or "BlastGuard wins" in report
 ```
 
-- [ ] **Step 2: Run to confirm failure**
+- [x] **Step 2: Run to confirm failure**
 
 Run: `cd bench && uv run pytest tests/test_compare.py -v`
 Expected: FAIL (missing functions).
 
-- [ ] **Step 3: Rewrite `bench/compare.py`**
+- [x] **Step 3: Rewrite `bench/compare.py`**
 
 ```python
 """Paired analysis reporter.
@@ -1209,12 +1209,12 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Run tests to confirm pass**
+- [x] **Step 4: Run tests to confirm pass**
 
 Run: `cd bench && uv run pytest tests/test_compare.py -v`
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bench/compare.py bench/tests/test_compare.py
@@ -1229,13 +1229,13 @@ git commit -m "bench: paired analysis reporter with McNemar's + infra exclusion"
 - Modify: `bench/grader.py` (keep `TAMPER_PATTERNS` + `detect_tampering`, delete `grade()` / `_count_passes()`)
 - Modify: `bench/KNOWN_GAPS.md`
 
-- [ ] **Step 1: Delete the pytest-based `grade()` function**
+- [x] **Step 1: Delete the pytest-based `grade()` function**
 
 Open `bench/grader.py`. Keep the top-of-file docstring, `TAMPER_PATTERNS`, `detect_tampering`, and `GradeResult` (used by `detect_tampering` callers). Delete the `grade()` function and `_count_passes()` helper — grading now lives in `evaluator.py`.
 
 After edit, `bench/grader.py` should be ~60 lines max.
 
-- [ ] **Step 2: Update `bench/KNOWN_GAPS.md`**
+- [x] **Step 2: Update `bench/KNOWN_GAPS.md`**
 
 Replace the body with:
 
@@ -1271,12 +1271,12 @@ anything that touches the datasets library.
   exposes #78 as `infra_failure` so it doesn't contaminate McNemar's.
 ```
 
-- [ ] **Step 3: Run full test suite to confirm nothing regresses**
+- [x] **Step 3: Run full test suite to confirm nothing regresses**
 
 Run: `cd bench && uv run pytest -v`
 Expected: all tests pass. If `test_grader.py` references `grade()`, delete or rewrite those tests to cover only `detect_tampering`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add bench/grader.py bench/KNOWN_GAPS.md bench/tests/test_grader.py
@@ -1385,7 +1385,7 @@ git commit -m "bench: document 10-task paired smoke + decision gate"
 
 ---
 
-## Task 10: Update bench/README.md workflow section
+## Task 10: Update bench/README.md workflow section [x]
 
 **Files:**
 - Modify: `bench/README.md`
