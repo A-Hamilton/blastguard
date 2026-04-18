@@ -21,7 +21,7 @@ path = "src/lib.rs"
 [dependencies]
 # MCP — rmcp 1.x. Verified on crates.io/docs.rs via context7 on 2026-04-18.
 rmcp = { version = "1.5", features = ["server", "transport-io", "macros", "schemars"] }
-schemars = "0.9"
+schemars = "1"
 
 # Runtime
 tokio = { version = "1", features = ["full"] }
