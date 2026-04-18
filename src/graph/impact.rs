@@ -167,6 +167,27 @@ pub fn detect_orphan(graph: &CodeGraph, removed: &Symbol) -> Option<Warning> {
     Some(Warning::new(WarningKind::Orphan, removed.id.clone(), body))
 }
 
+/// Render the one-line summary header for an `apply_change` response.
+/// Groups warnings by [`WarningKind::tag`] and produces
+/// `"N warnings: X SIGNATURE, Y ASYNC_CHANGE, ..."`. Empty input yields
+/// `"0 warnings"`. Tags are sorted alphabetically for stable output.
+#[must_use]
+pub fn summary_line(warnings: &[Warning]) -> String {
+    if warnings.is_empty() {
+        return "0 warnings".to_string();
+    }
+    let mut counts: std::collections::BTreeMap<&'static str, usize> =
+        std::collections::BTreeMap::new();
+    for w in warnings {
+        *counts.entry(w.kind.tag()).or_insert(0) += 1;
+    }
+    let parts: Vec<String> = counts
+        .iter()
+        .map(|(tag, n)| format!("{n} {tag}"))
+        .collect();
+    format!("{} warnings: {}", warnings.len(), parts.join(", "))
+}
+
 /// `INTERFACE_BREAK` — a TS interface or Rust trait's signature changed.
 /// Lists implementing classes/structs via reverse `Implements` edges.
 #[must_use]
@@ -222,6 +243,44 @@ mod tests {
         assert_eq!(WarningKind::AsyncChange.tag(), "ASYNC_CHANGE");
         assert_eq!(WarningKind::Orphan.tag(), "ORPHAN");
         assert_eq!(WarningKind::InterfaceBreak.tag(), "INTERFACE_BREAK");
+    }
+
+    #[test]
+    fn summary_line_groups_warnings_by_kind() {
+        use crate::graph::types::{SymbolId, SymbolKind};
+        let id = SymbolId {
+            file: std::path::PathBuf::from("a.ts"),
+            name: "x".to_string(),
+            kind: SymbolKind::Function,
+        };
+        let warnings = vec![
+            Warning::new(WarningKind::Signature, id.clone(), "sig"),
+            Warning::new(WarningKind::Orphan, id.clone(), "orph"),
+            Warning::new(WarningKind::Signature, id.clone(), "sig2"),
+        ];
+        let s = summary_line(&warnings);
+        assert!(s.starts_with("3 warnings"));
+        assert!(s.contains("2 SIGNATURE"));
+        assert!(s.contains("1 ORPHAN"));
+    }
+
+    #[test]
+    fn summary_line_zero_case() {
+        assert_eq!(summary_line(&[]), "0 warnings");
+    }
+
+    #[test]
+    fn warning_body_clamped_to_200_chars() {
+        use crate::graph::types::{SymbolId, SymbolKind};
+        let long_body = "x".repeat(500);
+        let id = SymbolId {
+            file: std::path::PathBuf::from("a.ts"),
+            name: "x".to_string(),
+            kind: SymbolKind::Function,
+        };
+        let w = Warning::new(WarningKind::Signature, id, long_body);
+        assert!(w.body.chars().count() <= 200);
+        assert!(w.body.ends_with('…'));
     }
 }
 
