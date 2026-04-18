@@ -17,7 +17,7 @@ use notify_debouncer_mini::{new_debouncer, DebouncedEvent, DebounceEventResult};
 use tokio::task::JoinHandle;
 
 use crate::graph::types::CodeGraph;
-use crate::parse::detect_language;
+use crate::parse::{detect_language, Language};
 
 /// Default debounce window for file-change events (SPEC §11).
 const DEBOUNCE: Duration = Duration::from_millis(100);
@@ -112,22 +112,118 @@ pub(crate) fn load_gitignore(project_root: &Path) -> Gitignore {
     gi
 }
 
-fn handle_event(event: &DebouncedEvent, project_root: &Path, _graph: &Arc<Mutex<CodeGraph>>) {
+fn handle_event(event: &DebouncedEvent, project_root: &Path, graph: &Arc<Mutex<CodeGraph>>) {
     let gi = load_gitignore(project_root);
-    if is_relevant(&event.path, project_root, &gi) {
-        // Task 3 fills the reindex body.
+    let path = &event.path;
+    if !is_relevant(path, project_root, &gi) {
+        return;
     }
+
+    if !path.exists() {
+        // File was deleted — drop its entries from the graph.
+        let mut g = graph.lock().expect("graph lock poisoned");
+        g.remove_file(path);
+        tracing::debug!(path = %path.display(), "watcher: dropped deleted file");
+        return;
+    }
+
+    // Read + reparse.
+    let Ok(source) = std::fs::read_to_string(path) else {
+        tracing::warn!(path = %path.display(), "watcher: read failed, skipping");
+        return;
+    };
+    let Some(language) = detect_language(path) else {
+        return;
+    };
+    let parsed = match language {
+        Language::TypeScript => crate::parse::typescript::extract(path, &source),
+        Language::JavaScript => crate::parse::javascript::extract(path, &source),
+        Language::Python => crate::parse::python::extract(path, &source),
+        Language::Rust => crate::parse::rust::extract(path, &source),
+    };
+
+    let mut g = graph.lock().expect("graph lock poisoned");
+    g.remove_file(path);
+    for sym in parsed.symbols {
+        g.insert_symbol(sym);
+    }
+    for edge in parsed.edges {
+        g.insert_edge(edge);
+    }
+    g.library_imports.extend(parsed.library_imports);
+    tracing::debug!(path = %path.display(), "watcher: reindexed");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify_debouncer_mini::DebouncedEventKind;
 
     #[test]
     fn spawn_watcher_on_missing_dir_returns_error() {
         let graph = Arc::new(Mutex::new(CodeGraph::new()));
         let result = spawn_watcher(PathBuf::from("/nonexistent/path/xyz123"), graph);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn modify_event_drops_and_reinserts_symbols() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        let file = tmp.path().join("src/a.ts");
+        std::fs::write(&file, "export function first() {}\n").expect("write v1");
+
+        // Prime the graph via cold_index.
+        let initial_graph =
+            crate::index::indexer::cold_index(tmp.path()).expect("cold");
+        // Sanity: the initial symbol is in the graph.
+        assert!(initial_graph.symbols.keys().any(|id| id.name == "first"));
+        let graph = Arc::new(Mutex::new(initial_graph));
+
+        // Mutate the file, then invoke handle_event directly.
+        std::fs::write(&file, "export function second() {}\n").expect("rewrite");
+        let event = DebouncedEvent {
+            path: file.clone(),
+            kind: DebouncedEventKind::Any,
+        };
+        handle_event(&event, tmp.path(), &graph);
+
+        let g = graph.lock().expect("lock");
+        assert!(
+            g.symbols.keys().any(|id| id.name == "second"),
+            "expected 'second' after reindex; symbols: {:?}",
+            g.symbols.keys().map(|k| &k.name).collect::<Vec<_>>()
+        );
+        assert!(
+            !g.symbols.keys().any(|id| id.name == "first"),
+            "old symbol 'first' should be gone"
+        );
+    }
+
+    #[test]
+    fn delete_event_removes_file_symbols() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        let file = tmp.path().join("src/gone.ts");
+        std::fs::write(&file, "export function doomed() {}\n").expect("write");
+
+        let initial_graph =
+            crate::index::indexer::cold_index(tmp.path()).expect("cold");
+        let graph = Arc::new(Mutex::new(initial_graph));
+
+        // Delete the file, then fire a synthetic event.
+        std::fs::remove_file(&file).expect("unlink");
+        let event = DebouncedEvent {
+            path: file.clone(),
+            kind: DebouncedEventKind::Any,
+        };
+        handle_event(&event, tmp.path(), &graph);
+
+        let g = graph.lock().expect("lock");
+        assert!(
+            !g.symbols.keys().any(|id| id.name == "doomed"),
+            "doomed should be gone"
+        );
     }
 }
 
