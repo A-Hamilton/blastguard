@@ -349,4 +349,15 @@ mod tests {
         assert!(!f.stack.is_empty(), "stack should have frames");
         assert!(f.stack.iter().any(|(p, _)| p.to_string_lossy().contains("handler.js")));
     }
+
+    #[test]
+    fn vitest_failing_parses_via_jest_shape() {
+        let r = parse_vitest(&fixture("vitest_failing.json"));
+        assert_eq!(r.passed, 1);
+        assert_eq!(r.failed, 1);
+        assert_eq!(r.failures.len(), 1);
+        let f = &r.failures[0];
+        assert_eq!(f.line, 10);
+        assert!(f.message.contains("AssertionError"));
+    }
 }
