@@ -21,7 +21,8 @@ def test_write_task_cache_round_trips(tmp_path: Path) -> None:
             problem_statement="Fix X",
             fail_to_pass=["tests.foo::test_bar"],
             pass_to_pass=["tests.foo::test_baz"],
-            reference_patch="",
+            language="python",
+            dockerhub_tag="",
         ),
     ]
     cache = tmp_path / "cache.jsonl"
@@ -41,3 +42,19 @@ def test_load_tasks_raises_when_datasets_missing(monkeypatch) -> None:
         assert "datasets" in str(e)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_load_tasks_python_only_has_expected_fields(monkeypatch):
+    """load_tasks returns Task records with real SWE-bench Pro fields."""
+    from bench.tasks import load_tasks
+
+    tasks = load_tasks(limit=5, python_only=True)
+    assert len(tasks) == 5
+    for t in tasks:
+        assert t.task_id
+        assert t.repo
+        assert t.base_commit
+        assert t.problem_statement
+        assert isinstance(t.fail_to_pass, list)
+        assert isinstance(t.pass_to_pass, list)
+        assert t.language == "python"

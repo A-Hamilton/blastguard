@@ -1,12 +1,20 @@
-"""Load SWE-bench Pro public tasks from HuggingFace.
+"""Load SWE-bench Pro tasks from HuggingFace.
 
-Uses `datasets.load_dataset` to pull the canonical public split. Exposes
-a minimal `Task` dataclass so downstream modules don't import the full
-HF dataset row shape.
+Real schema (ScaleAI/SWE-bench_Pro, split "test"):
+- instance_id: str
+- repo: str                         # "owner/repo"
+- base_commit: str
+- problem_statement: str
+- fail_to_pass: str                 # JSON-encoded list, lowercase key
+- pass_to_pass: str                 # JSON-encoded list, lowercase key
+- language: str                     # "python", "javascript", etc.
+- patch: str                        # ground-truth, NOT shown to agent
+- dockerhub_tag: str                # used by evaluator
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,59 +29,64 @@ SWE_BENCH_PRO_SPLIT = "test"
 
 @dataclass(frozen=True, slots=True)
 class Task:
-    """Minimal SWE-bench Pro task shape the harness needs."""
-
     task_id: str
-    repo: str            # "owner/repo"
-    base_commit: str     # SHA to checkout before patching
+    repo: str
+    base_commit: str
     problem_statement: str
-    fail_to_pass: list[str]    # pytest test node-ids that must flip pass
-    pass_to_pass: list[str]    # tests that must stay passing
-    reference_patch: str       # ground-truth patch (we DON'T show this to the agent)
+    fail_to_pass: list[str]
+    pass_to_pass: list[str]
+    language: str
+    dockerhub_tag: str
 
 
-def load_tasks(limit: int | None = None) -> list[Task]:
-    """Fetch the public split. `limit` returns a deterministic prefix."""
+def _coerce_list(raw: object) -> list[str]:
+    """Handle either native list or JSON-encoded string."""
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return [str(x) for x in parsed] if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def load_tasks(
+    limit: int | None = None,
+    python_only: bool = True,
+) -> list[Task]:
+    """Fetch the public test split. Filter to Python by default."""
     if load_dataset is None:
         raise RuntimeError(
             "datasets not installed — run `uv sync` inside bench/ first"
         )
-    # KNOWN_GAPS.md Gap 1: the real ScaleAI/SWE-bench_Pro dataset uses
-    # lowercase `fail_to_pass` / `pass_to_pass` keys, stores them as
-    # JSON-encoded strings (not lists), and has many more columns than the
-    # Plan 7 Task dataclass maps. Until the harness is rewritten against
-    # scaleapi/SWE-bench_Pro-os's proper evaluator, refuse to return tasks
-    # rather than produce a silently-broken result set.
-    raise RuntimeError(
-        "bench/tasks.py::load_tasks is not wired to the real "
-        "ScaleAI/SWE-bench_Pro schema yet. See bench/KNOWN_GAPS.md — "
-        "running the harness in its current state will grade ~0% for "
-        "reasons unrelated to agent skill. Fix the schema mapping and "
-        "Docker-based grading before re-enabling this loader."
-    )
+    ds = load_dataset(SWE_BENCH_PRO_DATASET, split=SWE_BENCH_PRO_SPLIT)
 
-    # Unreachable — kept for reference when the harness is rewritten.
-    ds = load_dataset(SWE_BENCH_PRO_DATASET, split=SWE_BENCH_PRO_SPLIT)  # noqa: F841
-    rows = ds if limit is None else ds.select(range(min(limit, len(ds))))
-    tasks = []
-    for row in rows:
+    tasks: list[Task] = []
+    for row in ds:
+        language = str(row.get("repo_language", "")).lower()
+        if python_only and language != "python":
+            continue
         tasks.append(
             Task(
                 task_id=str(row["instance_id"]),
                 repo=str(row["repo"]),
                 base_commit=str(row["base_commit"]),
                 problem_statement=str(row["problem_statement"]),
-                fail_to_pass=list(row.get("FAIL_TO_PASS", [])),
-                pass_to_pass=list(row.get("PASS_TO_PASS", [])),
-                reference_patch=str(row.get("patch", "")),
+                fail_to_pass=_coerce_list(row.get("fail_to_pass")),
+                pass_to_pass=_coerce_list(row.get("pass_to_pass")),
+                language=language,
+                dockerhub_tag=str(row.get("dockerhub_tag", "")),
             )
         )
+        if limit is not None and len(tasks) >= limit:
+            break
     return tasks
 
 
 def write_task_cache(tasks: list[Task], cache_path: Path) -> None:
     """Serialise tasks to JSONL for offline debugging."""
-    import json
     with cache_path.open("w", encoding="utf-8") as f:
         for t in tasks:
             f.write(
@@ -85,6 +98,8 @@ def write_task_cache(tasks: list[Task], cache_path: Path) -> None:
                         "problem_statement": t.problem_statement,
                         "fail_to_pass": t.fail_to_pass,
                         "pass_to_pass": t.pass_to_pass,
+                        "language": t.language,
+                        "dockerhub_tag": t.dockerhub_tag,
                     }
                 )
                 + "\n"
