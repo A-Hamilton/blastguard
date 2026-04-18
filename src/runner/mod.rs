@@ -105,3 +105,20 @@ pub fn run_tests(
 
     Ok(results.into())
 }
+
+#[cfg(test)]
+mod orchestrator_tests {
+    use super::*;
+    use crate::graph::types::CodeGraph;
+    use std::sync::Mutex;
+
+    #[test]
+    fn no_test_runner_error_when_project_has_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let graph = Mutex::new(CodeGraph::new());
+        let session = Mutex::new(SessionState::new());
+        let req = RunTestsRequest::default();
+        let err = run_tests(&graph, &session, tmp.path(), &req).expect_err("should error");
+        assert!(matches!(err, BlastGuardError::NoTestRunner), "got {err:?}");
+    }
+}
