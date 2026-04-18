@@ -18,7 +18,7 @@ const DEFAULT_MAX_HITS: usize = 10;
 /// has been wired for the matched `QueryKind` yet — remaining arms land in
 /// Tasks 4-12.
 #[must_use]
-pub fn dispatch(graph: &CodeGraph, _project_root: &Path, query: &str) -> Vec<SearchHit> {
+pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<SearchHit> {
     match classify(query) {
         QueryKind::Find(name) => structural::find(graph, &name, DEFAULT_MAX_HITS),
         QueryKind::Callers(name) => structural::callers_of(graph, &name, DEFAULT_MAX_HITS),
@@ -30,8 +30,7 @@ pub fn dispatch(graph: &CodeGraph, _project_root: &Path, query: &str) -> Vec<Sea
         QueryKind::ExportsOf(path) => structural::exports_of(graph, &path),
         QueryKind::TestsFor(target) => structural::tests_for(graph, &target),
         QueryKind::Libraries => structural::libraries(graph),
-        // Arms below land in subsequent tasks.
-        QueryKind::Grep(_) => Vec::new(),
+        QueryKind::Grep(pattern) => super::text::grep(project_root, &pattern),
     }
 }
 
@@ -88,5 +87,22 @@ mod tests {
         });
         let hits = dispatch(&g, Path::new("."), "callers of target");
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn dispatches_grep_query_to_text_backend() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(tmp.path())
+            .status()
+            .expect("git init");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(tmp.path().join("src/a.ts"), "const NEEDLE = 1;\n").expect("write");
+
+        let g = CodeGraph::new();
+        let hits = dispatch(&g, tmp.path(), "NEEDLE");
+        assert!(!hits.is_empty());
+        assert!(hits[0].snippet.as_deref().unwrap().contains("NEEDLE"));
     }
 }
