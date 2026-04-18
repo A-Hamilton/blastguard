@@ -3,7 +3,7 @@
 //! Each public function resolves a [`super::query::QueryKind`] arm against the
 //! [`CodeGraph`] and renders hits via [`super::hit::SearchHit::structural`].
 
-use crate::graph::ops::{callees, callers, find_by_name};
+use crate::graph::ops::{callees, callers, find_by_name, shortest_path};
 use crate::graph::types::{CodeGraph, SymbolId};
 use crate::search::hit::{sort_by_centrality, SearchHit};
 
@@ -61,6 +61,23 @@ pub fn callees_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchH
     callee_ids
         .into_iter()
         .take(max_hits)
+        .filter_map(|id| graph.symbols.get(id))
+        .map(SearchHit::structural)
+        .collect()
+}
+
+/// `chain from X to Y` — BFS shortest path, rendered as a sequence of hits.
+#[must_use]
+pub fn chain_from_to(graph: &CodeGraph, from_name: &str, to_name: &str) -> Vec<SearchHit> {
+    let from_ids = find_by_name(graph, from_name);
+    let to_ids = find_by_name(graph, to_name);
+    let (Some(&from_id), Some(&to_id)) = (from_ids.first(), to_ids.first()) else {
+        return Vec::new();
+    };
+    let Some(path) = shortest_path(graph, from_id, to_id) else {
+        return Vec::new();
+    };
+    path.iter()
         .filter_map(|id| graph.symbols.get(id))
         .map(SearchHit::structural)
         .collect()
@@ -254,6 +271,42 @@ mod tests {
         let files: Vec<_> = hits.iter().map(|h| h.file.clone()).collect();
         assert!(files.contains(&PathBuf::from("b.ts")));
         assert!(files.contains(&PathBuf::from("c.ts")));
+    }
+
+    #[test]
+    fn chain_from_to_returns_shortest_path() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+        let mut g = CodeGraph::new();
+        let a = sym("a", "a.ts");
+        let b = sym("b", "b.ts");
+        let c = sym("c", "c.ts");
+        insert_with_centrality(&mut g, a.clone(), 0);
+        insert_with_centrality(&mut g, b.clone(), 0);
+        insert_with_centrality(&mut g, c.clone(), 0);
+        for (from, to) in [(&a, &b), (&b, &c)] {
+            g.insert_edge(Edge {
+                from: from.id.clone(),
+                to: to.id.clone(),
+                kind: EdgeKind::Calls,
+                line: 1,
+                confidence: Confidence::Certain,
+            });
+        }
+        let hits = chain_from_to(&g, "a", "c");
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].file, PathBuf::from("a.ts"));
+        assert_eq!(hits[2].file, PathBuf::from("c.ts"));
+    }
+
+    #[test]
+    fn chain_from_to_empty_when_unreachable() {
+        let mut g = CodeGraph::new();
+        let a = sym("a", "a.ts");
+        let b = sym("b", "b.ts");
+        insert_with_centrality(&mut g, a, 0);
+        insert_with_centrality(&mut g, b, 0);
+        let hits = chain_from_to(&g, "a", "b");
+        assert!(hits.is_empty());
     }
 
     #[test]
