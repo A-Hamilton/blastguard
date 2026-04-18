@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::graph::CodeGraph;
 use crate::index::indexer;
+use crate::mcp::adapters::to_error_result;
 use crate::search::dispatch;
 use crate::session::SessionState;
 
@@ -57,8 +58,6 @@ pub struct BlastGuardServer {
     /// In-memory code graph, rebuilt from cache on warm start.
     pub(crate) graph: Arc<Mutex<CodeGraph>>,
     /// Per-session mutable state: edited files, last test run, etc.
-    // Consumed by `apply_change_tool`, `run_tests_tool`, and the status resource (Tasks 4-6).
-    #[expect(dead_code, reason = "consumed by apply_change_tool / run_tests_tool in Tasks 4-6")]
     pub(crate) session: Arc<Mutex<SessionState>>,
     /// Absolute path to the project root passed on the command line.
     pub(crate) project_root: PathBuf,
@@ -133,6 +132,42 @@ signatures. Free-text falls through to grep. Returns up to 30 hits.",
             })
             .collect();
         Ok(Json(SearchResponse { hits: lines }))
+    }
+
+    /// Apply text replacements to a file on disk, returning cascade warnings and bundled context.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CallToolResult` with `is_error: true` when the edit fails
+    /// (ambiguous match, edit not found, I/O error, or parse failure). The
+    /// `content` block carries the `BlastGuardError::Display` string.
+    #[tool(
+        name = "apply_change",
+        description = "Edit files with impact analysis. Writes immediately — no approval \
+gate. Response includes cascade warnings (callers that may break, interfaces that \
+may be violated) and a context bundle (callers, tests) so you rarely need follow-up \
+searches. Use for multi-file changes where blast radius matters; for trivial \
+single-line fixes your native edit tool is fine.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub fn apply_change_tool(
+        &self,
+        Parameters(req): Parameters<crate::edit::ApplyChangeRequest>,
+    ) -> Result<Json<crate::edit::ApplyChangeResponse>, CallToolResult> {
+        match crate::mcp::apply_change::handle(
+            &self.graph,
+            &self.session,
+            &self.project_root,
+            &req,
+        ) {
+            Ok(resp) => Ok(Json(resp)),
+            Err(err) => Err(to_error_result(&err)),
+        }
     }
 }
 
