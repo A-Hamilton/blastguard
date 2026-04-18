@@ -103,7 +103,7 @@ git commit -m "bench: pin scipy and add evaluator clone script"
 - Modify: `bench/tasks.py` (drop RuntimeError, load real schema, add filter)
 - Modify: `bench/tests/test_tasks.py` (update fixtures)
 
-- [ ] **Step 1: Write failing test — loads real schema fields**
+- [x] **Step 1: Write failing test — loads real schema fields**
 
 Append to `bench/tests/test_tasks.py`:
 
@@ -124,12 +124,12 @@ def test_load_tasks_python_only_has_expected_fields(monkeypatch):
         assert t.language == "python"
 ```
 
-- [ ] **Step 2: Run test to confirm it fails**
+- [x] **Step 2: Run test to confirm it fails**
 
 Run: `cd bench && uv run pytest tests/test_tasks.py::test_load_tasks_python_only_has_expected_fields -v`
 Expected: FAIL — `RuntimeError: bench/tasks.py::load_tasks is not wired...`
 
-- [ ] **Step 3: Rewrite `bench/tasks.py`**
+- [x] **Step 3: Rewrite `bench/tasks.py`**
 
 Replace the entire body of `bench/tasks.py` with:
 
@@ -242,12 +242,12 @@ def write_task_cache(tasks: list[Task], cache_path: Path) -> None:
             )
 ```
 
-- [ ] **Step 4: Run test to confirm it passes**
+- [x] **Step 4: Run test to confirm it passes**
 
 Run: `cd bench && HF_HOME=/tmp/hf uv run pytest tests/test_tasks.py -v`
 Expected: PASS for the new test (other tests may need fixture updates — fix them alongside).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bench/tasks.py bench/tests/test_tasks.py
@@ -264,7 +264,7 @@ git commit -m "bench: wire real SWE-bench Pro schema + Python-only filter"
 - Create: `bench/tests/test_budget.py`
 - Create: `bench/tests/test_telemetry.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `bench/tests/test_budget.py`:
 
@@ -326,12 +326,12 @@ def test_telemetry_record_roundtrip(tmp_path: Path):
     assert out.read_text().strip().startswith('{"task_id": "django__123"')
 ```
 
-- [ ] **Step 2: Run to confirm they fail**
+- [x] **Step 2: Run to confirm they fail**
 
 Run: `cd bench && uv run pytest tests/test_budget.py tests/test_telemetry.py -v`
 Expected: FAIL — `ModuleNotFoundError: bench.budget` / `bench.telemetry`.
 
-- [ ] **Step 3: Implement `bench/budget.py`**
+- [x] **Step 3: Implement `bench/budget.py`**
 
 ```python
 """Budget cap + per-rollout cost tracking.
@@ -381,7 +381,7 @@ class Budget:
         return cost
 ```
 
-- [ ] **Step 4: Implement `bench/telemetry.py`**
+- [x] **Step 4: Implement `bench/telemetry.py`**
 
 ```python
 """Per-rollout telemetry JSONL writer."""
@@ -418,12 +418,12 @@ def append_jsonl(record: TelemetryRecord, path: Path) -> None:
         f.write(json.dumps(asdict(record)) + "\n")
 ```
 
-- [ ] **Step 5: Run tests to confirm pass**
+- [x] **Step 5: Run tests to confirm pass**
 
 Run: `cd bench && uv run pytest tests/test_budget.py tests/test_telemetry.py -v`
 Expected: PASS (5 tests total).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add bench/budget.py bench/telemetry.py bench/tests/test_budget.py bench/tests/test_telemetry.py
@@ -438,7 +438,7 @@ git commit -m "bench: add budget cap + telemetry JSONL writer"
 - Create: `bench/stats.py`
 - Create: `bench/tests/test_stats.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `bench/tests/test_stats.py`:
 
@@ -480,12 +480,12 @@ def test_mcnemar_zero_discordant():
     assert r.p_value == 1.0
 ```
 
-- [ ] **Step 2: Run to confirm they fail**
+- [x] **Step 2: Run to confirm they fail**
 
 Run: `cd bench && uv run pytest tests/test_stats.py -v`
 Expected: FAIL — `ModuleNotFoundError: bench.stats`.
 
-- [ ] **Step 3: Implement `bench/stats.py`**
+- [x] **Step 3: Implement `bench/stats.py`**
 
 ```python
 """Paired McNemar's test for A/B benchmark comparison.
@@ -572,12 +572,12 @@ def mcnemar_paired(pairs: list[tuple[str, int]]) -> PairedResult:
     )
 ```
 
-- [ ] **Step 4: Run tests to confirm pass**
+- [x] **Step 4: Run tests to confirm pass**
 
 Run: `cd bench && uv run pytest tests/test_stats.py -v`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bench/stats.py bench/tests/test_stats.py
@@ -974,6 +974,92 @@ def run_openai_compatible(
 
 The patch must be the unified diff of the workspace vs. base commit. If the existing loop doesn't produce one, compute it with `git diff` at the end of the rollout.
 
+- [ ] **Step 3a: Reinforce BG-arm system prompt with explicit tool-preference hierarchy**
+
+Open `bench/prompts.py` and make `build_system_prompt(arm)` return two distinct prompts. The raw arm gets the baseline SWE-bench system prompt (file exploration + patching). The BlastGuard arm gets an identical prompt **plus** an appended block that explicitly biases (not forces) BlastGuard tools. This implements the four-layer reinforcement (MCP tool descriptions + server instructions + skill + this system-prompt hierarchy).
+
+If `bench/prompts.py` doesn't already exist, create it. Replace the existing `build_system_prompt` implementation with:
+
+```python
+"""System prompts per arm for benchmark rollouts."""
+
+from __future__ import annotations
+
+BASE_PROMPT = """\
+You are an autonomous software engineer solving a real GitHub issue in an
+existing repository. You will:
+
+1. Read the problem statement carefully.
+2. Explore the repository to understand the failing code and its tests.
+3. Produce a minimal, targeted edit that makes the fail-to-pass tests pass
+   without breaking the pass-to-pass tests.
+4. Emit the final patch as a unified diff covering all your changes.
+
+You have native tools (Read, Write, Bash, Grep, Edit) and may use any of them.
+Write `DONE` on a line by itself when your edit is complete.
+"""
+
+BLASTGUARD_BIAS = """\
+
+You ALSO have access to the BlastGuard MCP, which is designed exactly for this
+task class. Strongly prefer BlastGuard tools over native alternatives in these
+situations:
+
+- Finding callers, callees, imports, tests, outlines of a symbol or file
+  → use `blastguard__search`. It returns structured graph data in 50-300
+  tokens instead of 10k+ from grep.
+- Editing a source file → use `blastguard__apply_change`. It surfaces
+  SIGNATURE / ASYNC_CHANGE / ORPHAN / INTERFACE_BREAK cascade warnings plus
+  a bundled context (callers + tests) in one response. Native Write/Edit
+  work but miss the cascade analysis.
+- Running tests → use `blastguard__run_tests`. It auto-detects the runner
+  (pytest / jest / cargo) and annotates failures with
+  "YOU MODIFIED X (N edits ago)" when the failing stack frame lands in code
+  you recently changed — this is how you tie a new regression back to your
+  own edit.
+
+Use native tools for: reading specific files you already know the path to,
+writing brand-new files, running ad-hoc bash commands (`ls`, `cat`, env
+inspection). Do not re-grep for a symbol you can ask BlastGuard about.
+"""
+
+
+def build_system_prompt(*, arm: str) -> str:
+    if arm == "raw":
+        return BASE_PROMPT
+    if arm == "blastguard":
+        return BASE_PROMPT + BLASTGUARD_BIAS
+    raise ValueError(f"unknown arm: {arm!r}")
+```
+
+Add a unit test at `bench/tests/test_prompts.py`:
+
+```python
+from bench.prompts import build_system_prompt
+
+
+def test_raw_prompt_has_no_blastguard_references():
+    p = build_system_prompt(arm="raw")
+    assert "BlastGuard" not in p
+    assert "blastguard__" not in p
+
+
+def test_blastguard_prompt_includes_all_three_tools():
+    p = build_system_prompt(arm="blastguard")
+    assert "blastguard__search" in p
+    assert "blastguard__apply_change" in p
+    assert "blastguard__run_tests" in p
+    assert "cascade" in p.lower()
+
+
+def test_unknown_arm_raises():
+    import pytest
+    with pytest.raises(ValueError):
+        build_system_prompt(arm="nonsense")
+```
+
+Verify: `cd bench && uv run pytest tests/test_prompts.py -v` → 3 pass.
+
 - [ ] **Step 4: Smoke-test with a tiny limit (dry run, no network)**
 
 Run: `cd bench && uv run python -m bench.runner --arm raw --limit 0 --seed 42 --budget-usd 0.10 --run-id smoke-dry --model minimax/minimax-m2.7`
@@ -1199,69 +1285,102 @@ git commit -m "bench: retire pytest grader, grading now via evaluator.py"
 
 ---
 
-## Task 9: End-to-end smoke test (3 tasks, raw arm only)
+## Task 9: End-to-end paired smoke (10 tasks, both arms)
 
 **Files:**
-- No code changes — this is a manual verification gate.
+- No code changes — this is a manual verification gate before any real spend.
 
-Run a tiny rollout to verify the full pipeline works before spending real money.
+Run a small paired rollout to verify the full pipeline (raw + BlastGuard + evaluator + McNemar's) works end-to-end. Statistical power on 10 tasks is ~zero; this is a harness-wiring smoke, not a lift measurement. Expected spend: **~$3-4 across both arms**.
 
 - [ ] **Step 1: Ensure Docker is running**
 
 Run: `docker info | head -5`
-Expected: server version and storage driver printed. If Docker isn't running, start it: `sudo systemctl start docker` (or whatever the user's OS requires).
+Expected: server version and storage driver printed. If Docker isn't running, start it (`sudo systemctl start docker` or equivalent for the user's OS).
 
 - [ ] **Step 2: Clone the evaluator**
 
 Run: `cd bench && bash scripts/clone_evaluator.sh`
 Expected: `bench/.evaluator/swe_bench_pro_eval.py` exists.
 
-- [ ] **Step 3: Run the raw arm on 3 tasks**
+- [ ] **Step 3: Run the raw arm on 10 tasks**
 
-Run:
 ```bash
 cd bench && \
   export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d= -f2) && \
   HF_HOME=/tmp/hf uv run python -m bench.runner \
     --arm raw \
     --model minimax/minimax-m2.7 \
-    --limit 3 \
+    --limit 10 \
     --seed 42 \
-    --budget-usd 2.00 \
+    --budget-usd 5.00 \
     --run-id smoke-raw
 ```
 
-Expected: completes within 10 minutes. `bench/results/smoke-raw/patches.json` contains 3 entries. `telemetry.jsonl` has 3 rows. Budget spent < $2.00.
+Expected: completes within 30 minutes. `bench/results/smoke-raw/patches.json` contains 10 entries. `telemetry.jsonl` has 10 rows. Spend < $3.
 
-- [ ] **Step 4: Run the evaluator on those 3 patches**
+- [ ] **Step 4: Run the BlastGuard arm on the same 10 tasks (same seed)**
 
-The evaluator also needs a raw_sample CSV — download or generate it from the HuggingFace dataset first (the evaluator's README shows how). Skip Docker validation if smoke is purely harness-wiring.
+```bash
+cd bench && \
+  export OPENROUTER_API_KEY=$(grep OPENROUTER_API_KEY .env | cut -d= -f2) && \
+  HF_HOME=/tmp/hf uv run python -m bench.runner \
+    --arm blastguard \
+    --model minimax/minimax-m2.7 \
+    --limit 10 \
+    --seed 42 \
+    --budget-usd 5.00 \
+    --run-id smoke-bg
+```
 
-Run:
+Expected: 10 rows in `telemetry.jsonl`. Per-task mean tokens should be meaningfully lower than the raw arm (that's the BlastGuard cost-saving thesis — log the delta). Spend < $2.
+
+- [ ] **Step 5: Grade both arms via evaluator**
+
 ```bash
 cd bench && uv run python -c "
 from bench.evaluator import run_evaluator
 from pathlib import Path
-rc = run_evaluator(
-    evaluator_dir=Path('.evaluator'),
-    raw_sample_csv=Path('.evaluator/swe_bench_pro_full.csv'),
-    patches_json=Path('results/smoke-raw/patches.json'),
-    output_dir=Path('results/smoke-raw/eval'),
-    num_workers=2,
-    timeout_seconds=1800,
-)
-print('evaluator exit:', rc)
+for run_id in ('smoke-raw', 'smoke-bg'):
+    rc = run_evaluator(
+        evaluator_dir=Path('.evaluator'),
+        raw_sample_csv=Path('.evaluator/swe_bench_pro_full.csv'),
+        patches_json=Path(f'results/{run_id}/patches.json'),
+        output_dir=Path(f'results/{run_id}/eval'),
+        num_workers=2,
+        timeout_seconds=3600,
+    )
+    print(f'{run_id} evaluator exit: {rc}')
 "
 ```
 
-Expected: exit 0. `results/smoke-raw/eval/*.json` has 3 files. At least one has `resolved: true` or `false` (not all infra_failure).
+Expected: both exit 0. Each `eval/` dir contains 10 per-instance JSON files. A non-zero count have `resolved: true` or `false` (not every task is `infra_failure=True`).
 
-- [ ] **Step 5: Commit the smoke script as documentation**
+- [ ] **Step 6: Run the paired comparison**
 
 ```bash
-# Add a smoke command to bench/README.md showing the exact invocations above.
+cd bench && uv run python -m bench.compare \
+  --raw-output-dir results/smoke-raw/eval \
+  --blastguard-output-dir results/smoke-bg/eval
+```
+
+Expected: McNemar's report prints. With n=10 the p-value is meaningless, but the infra-failure filter and per-arm score calculation must produce sensible numbers (not NaN, not crash).
+
+- [ ] **Step 7: Decision gate**
+
+Before proceeding to the 100-task pilot, verify:
+- [ ] Total spend < $5
+- [ ] Both arms produced 10 patches
+- [ ] Evaluator completed both arms with < 30% `infra_failure` rate
+- [ ] `compare.py` ran cleanly and emitted a paired report
+- [ ] Per-task token delta shows BlastGuard arm using fewer tokens on average
+
+If any of these fail, STOP and fix the harness — do not pay for a 100-task pilot against a broken pipeline.
+
+- [ ] **Step 8: Commit the smoke script as documentation**
+
+```bash
 git add bench/README.md
-git commit -m "bench: document 3-task smoke-test workflow"
+git commit -m "bench: document 10-task paired smoke + decision gate"
 ```
 
 ---
@@ -1281,31 +1400,43 @@ Prerequisites:
 - `.env` with `OPENROUTER_API_KEY=sk-or-v1-...`
 - `bench/.evaluator/` cloned via `bash scripts/clone_evaluator.sh`
 
-### 1. Smoke test (3 tasks, ~$1)
+### 1. Paired smoke (10 tasks, ~$3-4)
+
+Gate before paying for a pilot. Validates harness end-to-end.
 
     cd bench
+    # raw arm
     HF_HOME=/tmp/hf uv run python -m bench.runner \
-      --arm raw --limit 3 --seed 42 \
-      --budget-usd 2.00 --run-id smoke-raw \
+      --arm raw --limit 10 --seed 42 \
+      --budget-usd 5.00 --run-id smoke-raw \
       --model minimax/minimax-m2.7
 
-### 2. Paired pilot (100 tasks, ~$46)
+    # blastguard arm — same seed, same tasks
+    HF_HOME=/tmp/hf uv run python -m bench.runner \
+      --arm blastguard --limit 10 --seed 42 \
+      --budget-usd 5.00 --run-id smoke-bg \
+      --model minimax/minimax-m2.7
 
-    # raw arm
+### 2. Paired pilot (100 tasks, ~$38 total)
+
+Raw arm ~$23 (more tokens, more turns). BlastGuard arm ~$14 (graph retrieval cuts per-task tokens ~40%).
+
+    # raw arm — budget at expected ceiling
     HF_HOME=/tmp/hf uv run python -m bench.runner \
       --arm raw --limit 100 --seed 42 \
       --budget-usd 30.00 --run-id pilot-raw \
       --model minimax/minimax-m2.7
 
-    # blastguard arm — same seed, same tasks, same order
+    # blastguard arm — same seed, same tasks
     HF_HOME=/tmp/hf uv run python -m bench.runner \
       --arm blastguard --limit 100 --seed 42 \
-      --budget-usd 30.00 --run-id pilot-bg \
+      --budget-usd 20.00 --run-id pilot-bg \
       --model minimax/minimax-m2.7
 
 ### 3. Grade both arms
 
     uv run python -c "from bench.evaluator import run_evaluator; \
+      from pathlib import Path; \
       run_evaluator(evaluator_dir=Path('.evaluator'), \
         raw_sample_csv=Path('.evaluator/swe_bench_pro_full.csv'), \
         patches_json=Path('results/pilot-raw/patches.json'), \
@@ -1318,11 +1449,12 @@ Prerequisites:
       --raw-output-dir results/pilot-raw/eval \
       --blastguard-output-dir results/pilot-bg/eval
 
-Expected output: McNemar's p-value, per-arm scores, delta in pp.
+Expected output: McNemar's p-value, per-arm scores, delta in pp, mean
+tokens per task per arm.
 
-### 5. Full run (731 tasks, ~$170) — gated on pilot showing ≥+1pp delta
+### 5. Full run (731 tasks, ~$275 total) — gated on pilot showing ≥+1pp delta
 
-Swap `--limit 100` for `--limit 731` (or omit). Budgets per arm: ~$90.
+Swap `--limit 100` for `--limit 731` (or omit). Budgets: raw ~$180, BlastGuard ~$110.
 ```
 
 Commit:
