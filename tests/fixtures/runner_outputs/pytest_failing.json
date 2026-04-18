@@ -1,0 +1,1 @@
+{"summary":{"passed":1,"failed":1,"skipped":0,"total":2,"collected":2},"duration":0.1,"tests":[{"nodeid":"tests/test_handler.py::test_ok","outcome":"passed"},{"nodeid":"tests/test_handler.py::test_fail","outcome":"failed","lineno":23,"call":{"longrepr":"AssertionError: assert 1 == 2","traceback":[{"path":"tests/test_handler.py","lineno":23,"message":"AssertionError"}]}}]}

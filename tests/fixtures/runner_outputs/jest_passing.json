@@ -1,0 +1,1 @@
+{"numTotalTests":3,"numPassedTests":3,"numFailedTests":0,"numPendingTests":0,"startTime":0,"success":true,"testResults":[{"name":"/tmp/a.test.js","assertionResults":[{"fullName":"ok","status":"passed"},{"fullName":"also_ok","status":"passed"},{"fullName":"still_ok","status":"passed"}]}]}

@@ -1,0 +1,8 @@
+{"type":"suite","event":"started","test_count":3}
+{"type":"test","event":"started","name":"foo::tests::ok"}
+{"type":"test","event":"ok","name":"foo::tests::ok","exec_time":0.001}
+{"type":"test","event":"started","name":"foo::tests::failing"}
+{"type":"test","event":"failed","name":"foo::tests::failing","stdout":"thread 'foo::tests::failing' panicked at 'assertion failed: 1 == 2', src/foo.rs:42:5\n"}
+{"type":"test","event":"started","name":"foo::tests::ignored"}
+{"type":"test","event":"ignored","name":"foo::tests::ignored"}
+{"type":"suite","event":"failed","passed":1,"failed":1,"allowed_fail":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.01}
