@@ -15,9 +15,12 @@ fn main() -> anyhow::Result<()> {
     let project_root = resolve_project_root()?;
     tracing::info!(project_root = %project_root.display(), "BlastGuard starting");
 
-    // Phase 1 wiring — placeholder. The full boot sequence is implemented in
-    // `mcp::server::run` as the indexer, watcher, and rmcp service come online.
-    blastguard::mcp::server::run(&project_root)
+    // Spin up a Tokio runtime and hand off to the async MCP boot sequence.
+    // The rest of main is synchronous (tracing init, arg parsing), so we use
+    // block_on rather than annotating main with #[tokio::main], which would
+    // silently swallow the synchronous work above into the async context.
+    let rt = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
+    rt.block_on(blastguard::mcp::server::run(&project_root))
 }
 
 fn init_tracing() {
