@@ -64,9 +64,73 @@ pub fn build_command(runner: Runner, project_root: &Path, filter: Option<&str>) 
     cmd
 }
 
+use std::time::{Duration, Instant};
+
+use crate::error::{BlastGuardError, Result};
+
+/// Captured output from a completed (or killed) runner process.
+#[derive(Debug)]
+pub struct ExecuteResult {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub duration: Duration,
+}
+
+/// Spawn the given [`Command`] and wait for it, killing on `timeout` overrun.
+/// Polls `try_wait` at 50ms cadence — fine for test-runner workloads where
+/// the inner test cost dwarfs polling overhead.
+///
+/// # Errors
+/// Returns [`BlastGuardError::TestCrashed`] when the child cannot be
+/// spawned (e.g., program not found) or the wait machinery fails.
+pub fn run(mut cmd: Command, timeout: Duration) -> Result<ExecuteResult> {
+    let started = Instant::now();
+    let mut child = cmd.spawn().map_err(|e| BlastGuardError::TestCrashed {
+        stderr: format!("failed to spawn: {e}"),
+    })?;
+
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    timed_out = true;
+                    let _ = child.wait();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(BlastGuardError::TestCrashed {
+                    stderr: format!("wait error: {e}"),
+                });
+            }
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| BlastGuardError::TestCrashed {
+            stderr: format!("wait_with_output: {e}"),
+        })?;
+
+    Ok(ExecuteResult {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code: output.status.code(),
+        timed_out,
+        duration: started.elapsed(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn jest_command_has_json_reporter() {
@@ -127,5 +191,24 @@ mod tests {
             .collect();
         let k_idx = args.iter().position(|a| a == "-k").expect("missing -k");
         assert_eq!(args[k_idx + 1], "auth");
+    }
+
+    #[test]
+    fn run_within_timeout_captures_stdout() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("hello");
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let result = run(cmd, Duration::from_secs(5)).expect("run");
+        assert_eq!(result.exit_code, Some(0));
+        assert!(String::from_utf8_lossy(&result.stdout).contains("hello"));
+    }
+
+    #[test]
+    fn run_exceeds_timeout_returns_timeout_flag() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let result = run(cmd, Duration::from_millis(200)).expect("run");
+        assert!(result.timed_out, "expected timed_out=true");
     }
 }
