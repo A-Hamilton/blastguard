@@ -100,12 +100,12 @@ pub fn cold_index(project_root: &Path) -> Result<CodeGraph> {
         }
     }
     let mut tree_hashes = HashMap::new();
-    match crate::index::cache::hash_directory_tree(project_root) {
+    match crate::index::cache::hash_project_tree(project_root, walk_project) {
         Ok(root_hash) => {
             tree_hashes.insert(project_root.to_path_buf(), root_hash);
         }
         Err(err) => {
-            tracing::warn!(error = %err, "hash_directory_tree failed during cache persist");
+            tracing::warn!(error = %err, "hash_project_tree failed during cache persist");
         }
     }
     let cache = crate::index::cache::CacheFile {
@@ -149,9 +149,9 @@ pub fn warm_start(project_root: &Path) -> Result<CodeGraph> {
         return cold_index(project_root);
     };
 
-    // Fast path: if the root directory Merkle hash matches, the entire tree
-    // is unchanged — skip file-level work entirely.
-    let current_root_hash = crate::index::cache::hash_directory_tree(project_root)?;
+    // Fast path: if the gitignore-filtered Merkle hash matches, the entire
+    // tracked tree is unchanged — skip file-level work entirely.
+    let current_root_hash = crate::index::cache::hash_project_tree(project_root, walk_project)?;
     if cache.tree_hashes.get(project_root).copied() == Some(current_root_hash) {
         return Ok(cache.graph);
     }
@@ -163,11 +163,28 @@ pub fn warm_start(project_root: &Path) -> Result<CodeGraph> {
     let mut current_hashes: HashMap<PathBuf, u64> = HashMap::new();
     let mut changed: Vec<PathBuf> = Vec::new();
 
-    for path in &files {
-        let h = crate::index::cache::hash_file(path)?;
-        current_hashes.insert(path.clone(), h);
-        if cache.file_hashes.get(path).copied() != Some(h) {
-            changed.push(path.clone());
+    // Hash files in parallel (SPEC §10) and skip any that disappear mid-walk
+    // (race with external git checkout or watcher delete) rather than crashing.
+    let hash_results: Vec<(PathBuf, crate::Result<u64>)> = files
+        .par_iter()
+        .map(|path| (path.clone(), crate::index::cache::hash_file(path)))
+        .collect();
+
+    for (path, res) in hash_results {
+        match res {
+            Ok(h) => {
+                if cache.file_hashes.get(&path).copied() != Some(h) {
+                    changed.push(path.clone());
+                }
+                current_hashes.insert(path, h);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "skipping file — hash failed during warm_start"
+                );
+            }
         }
     }
 
@@ -417,6 +434,45 @@ mod tests {
             !graph.symbols.keys().any(|id| id.name == "foo"),
             "old symbol survived warm_start reparse: {:?}",
             graph.symbols.keys().map(|k| &k.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn warm_start_fast_path_survives_gitignored_file_changes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(tmp.path())
+            .status()
+            .expect("git init");
+        std::fs::write(tmp.path().join(".gitignore"), "node_modules/\n").expect("write gitignore");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir src");
+        std::fs::create_dir_all(tmp.path().join("node_modules")).expect("mkdir nm");
+        std::fs::write(tmp.path().join("src/a.ts"), "export function foo() {}").expect("write src");
+
+        // Prime the cache.
+        let _ = cold_index(tmp.path()).expect("cold_index");
+
+        // Change something inside node_modules — gitignored, should NOT invalidate.
+        std::fs::write(
+            tmp.path().join("node_modules/installed.ts"),
+            "export function x() {}",
+        )
+        .expect("write ignored");
+        std::fs::write(
+            tmp.path().join("node_modules/installed.ts"),
+            "export function x() { return 1; }",
+        )
+        .expect("mutate");
+
+        let graph = warm_start(tmp.path()).expect("warm_start");
+        assert!(
+            graph.symbols.keys().any(|id| id.name == "foo"),
+            "foo should still be present — tree-hash check should have fast-pathed"
+        );
+        assert!(
+            !graph.symbols.keys().any(|id| id.name == "x"),
+            "x is in node_modules/ and should not be indexed"
         );
     }
 

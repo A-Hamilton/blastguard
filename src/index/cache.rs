@@ -121,6 +121,44 @@ pub fn hash_directory_tree(dir: &Path) -> Result<u64> {
     ))
 }
 
+/// Merkle hash of the project's gitignore-filtered file tree.
+///
+/// Takes the sorted list of `(relative_path, file_hash)` pairs produced by
+/// walking the project via [`crate::index::indexer::walk_project`], feeds
+/// both components into BLAKE3, and returns the first 8 bytes as a `u64`.
+/// This definition stays invariant under changes inside gitignored paths
+/// (`node_modules`, `target`, `__pycache__`) — exactly the property
+/// `warm_start` relies on to fast-path.
+///
+/// # Errors
+/// Returns [`BlastGuardError::Io`] if any walked file cannot be hashed.
+///
+/// # Panics
+/// Never panics in practice: the `expect` call is on a fixed-size BLAKE3
+/// digest slice (always 32 bytes) and is unreachable by construction.
+#[must_use = "directory hash should be stored or compared"]
+pub fn hash_project_tree(
+    project_root: &Path,
+    walk_fn: impl Fn(&Path) -> Vec<std::path::PathBuf>,
+) -> Result<u64> {
+    let mut files = walk_fn(project_root);
+    files.sort();
+    let mut hasher = blake3::Hasher::new();
+    for file in &files {
+        let rel = file.strip_prefix(project_root).unwrap_or(file);
+        hasher.update(rel.to_string_lossy().as_bytes());
+        let h = hash_file(file)?;
+        hasher.update(&h.to_le_bytes());
+    }
+    Ok(u64::from_le_bytes(
+        hasher
+            .finalize()
+            .as_bytes()[..8]
+            .try_into()
+            .expect("digest is 32 bytes"),
+    ))
+}
+
 /// Persist a `CacheFile` to disk using `rmp-serde`. Ensures the parent
 /// directory exists before writing.
 ///
