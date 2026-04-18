@@ -20,6 +20,11 @@ pub fn find(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
         .collect()
 }
 
+// TODO(plan-3): introduce callers_of_id / tests_for_id / importers_of_id
+// helpers that take a pre-resolved &SymbolId. Plan 3's apply_change will
+// already hold the exact id of the symbol it just wrote; re-resolving by
+// name risks false positives on name collisions.
+
 /// `callers of X` / `what calls X` — reverse BFS (1 hop) with inline signatures.
 ///
 /// Resolves `name` to the most-central exact-match symbol, then returns its
@@ -148,12 +153,14 @@ pub fn libraries(graph: &CodeGraph) -> Vec<SearchHit> {
 }
 
 /// Heuristic: a path is a "test path" if any component contains `.test.`,
-/// `_test`, `test_`, or equals `tests`.
+/// `.spec.`, `_test`, `test_`, or equals `tests` / `__tests__`.
 fn is_test_path(path: &std::path::Path) -> bool {
     path.components().any(|c| {
         let s = c.as_os_str().to_string_lossy();
         s == "tests"
+            || s == "__tests__"
             || s.contains(".test.")
+            || s.contains(".spec.")
             || s.contains("_test")
             || s.starts_with("test_")
     })
@@ -527,6 +534,68 @@ mod tests {
         let hits = tests_for(&g, "processRequest");
         // No importers at all → empty; just verifies it doesn't panic.
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn tests_for_recognises_double_underscore_tests_dir() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind, SymbolKind};
+        let mut g = CodeGraph::new();
+        let src_id = SymbolId {
+            file: PathBuf::from("src/handler.ts"),
+            name: "handler".to_string(),
+            kind: SymbolKind::Module,
+        };
+        let jest_test_id = SymbolId {
+            file: PathBuf::from("src/__tests__/handler.ts"),
+            name: "jest_handler".to_string(),
+            kind: SymbolKind::Module,
+        };
+        for id in [&src_id, &jest_test_id] {
+            let mut s = sym(&id.name, &id.file.to_string_lossy());
+            s.id = id.clone();
+            g.insert_symbol(s);
+        }
+        g.insert_edge(Edge {
+            from: jest_test_id.clone(),
+            to: src_id.clone(),
+            kind: EdgeKind::Imports,
+            line: 1,
+            confidence: Confidence::Certain,
+        });
+        let hits = tests_for(&g, "src/handler.ts");
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].file.to_string_lossy().contains("__tests__"));
+    }
+
+    #[test]
+    fn tests_for_recognises_spec_suffix() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind, SymbolKind};
+        let mut g = CodeGraph::new();
+        let src_id = SymbolId {
+            file: PathBuf::from("src/handler.ts"),
+            name: "handler".to_string(),
+            kind: SymbolKind::Module,
+        };
+        let spec_id = SymbolId {
+            file: PathBuf::from("src/handler.spec.ts"),
+            name: "spec_handler".to_string(),
+            kind: SymbolKind::Module,
+        };
+        for id in [&src_id, &spec_id] {
+            let mut s = sym(&id.name, &id.file.to_string_lossy());
+            s.id = id.clone();
+            g.insert_symbol(s);
+        }
+        g.insert_edge(Edge {
+            from: spec_id.clone(),
+            to: src_id.clone(),
+            kind: EdgeKind::Imports,
+            line: 1,
+            confidence: Confidence::Certain,
+        });
+        let hits = tests_for(&g, "src/handler.ts");
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].file.to_string_lossy().contains(".spec."));
     }
 
     #[test]

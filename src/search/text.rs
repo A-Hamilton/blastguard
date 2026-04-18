@@ -35,7 +35,6 @@ pub fn grep(project_root: &Path, pattern: &str) -> Vec<SearchHit> {
     let mut hits = Vec::new();
     let walker = ignore::WalkBuilder::new(project_root)
         .standard_filters(true)
-        .hidden(false)
         .build();
 
     for entry in walker.filter_map(std::result::Result::ok) {
@@ -147,5 +146,19 @@ mod tests {
         // `?(` is invalid as a bare regex; must still match as a literal.
         let hits = grep(tmp.path(), "?(invalid)");
         assert!(!hits.is_empty(), "literal fallback should match");
+    }
+
+    #[test]
+    fn grep_skips_hidden_dotfiles() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        seed(tmp.path(), &[
+            ("src/a.ts", "const PUBLIC = 1;"),
+            (".env", "SECRET=abc123"),
+        ]);
+        let hits = grep(tmp.path(), "abc123");
+        assert!(
+            hits.is_empty(),
+            "grep must not scan hidden files; got {hits:?}"
+        );
     }
 }
