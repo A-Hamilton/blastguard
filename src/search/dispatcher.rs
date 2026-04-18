@@ -1,25 +1,14 @@
-//! Query classifier for `search` — SPEC §3.1 dispatcher table.
-//!
-//! Phase 1.5 lands the full regex ladder. This module holds the placeholder
-//! types and classifier entry point so the rest of the crate compiles.
+//! Top-level search dispatcher — routes query strings to structural or text
+//! backends. Implemented arm-by-arm starting in Plan 2 Task 3.
 
-use serde::Serialize;
+use std::path::Path;
 
 use crate::graph::types::CodeGraph;
 
-/// A single search result. Rendered to an MCP text block by the tool handler.
-#[derive(Debug, Clone, Serialize)]
-pub struct SearchHit {
-    pub file: std::path::PathBuf,
-    pub line: u32,
-    pub signature: String,
-    pub snippet: Option<String>,
-}
+use super::SearchHit;
 
-/// Dispatch a query. Phase 1.5 will route to structural or grep based on
-/// pattern recognition; for now it returns an empty result set.
+/// Dispatch a query. Arms are filled in sequentially from Task 3 onwards.
 #[must_use]
-pub fn dispatch(_graph: &CodeGraph, _query: &str) -> Vec<SearchHit> {
-    // TODO(phase-1.5): regex ladder per SPEC §3.1 dispatch table.
+pub fn dispatch(_graph: &CodeGraph, _project_root: &Path, _query: &str) -> Vec<SearchHit> {
     Vec::new()
 }

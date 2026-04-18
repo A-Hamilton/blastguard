@@ -1,11 +1,17 @@
 //! Search dispatcher and backends — SPEC §3.1.
 //!
-//! The dispatcher parses the `query` string, classifies it by pattern, and
-//! routes to the structural (graph) backend or the regex-grep fallback.
-//! Phase 2 adds the semantic backend behind the `semantic` feature.
+//! Module layout (all populated incrementally across Plan 2):
+//! - [`hit`] — `SearchHit` struct + centrality ranking helper (Task 1)
+//! - [`query`] — `QueryKind` enum + `classify` regex ladder (Task 2)
+//! - [`dispatcher`] — `dispatch` entry point routing `QueryKind` → backend (Tasks 2+)
+//! - [`structural`] — graph-backed implementations of each `QueryKind` (Tasks 3-11)
+//! - [`text`] — regex grep fallback via the `ignore` crate (Task 12)
 
 pub mod dispatcher;
+pub mod hit;
+pub mod query;
 pub mod structural;
 pub mod text;
 
-pub use dispatcher::{dispatch, SearchHit};
+pub use dispatcher::dispatch;
+pub use hit::SearchHit;
