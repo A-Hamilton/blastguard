@@ -175,16 +175,11 @@ impl CodeGraph {
                     }
                 }
             }
-            // Reverse edges pointing at this symbol — callers retain broken
-            // edges so ORPHAN cascade detection still fires. Drop the index
-            // entry but keep the outgoing edges from callers.
-            if let Some(rev) = self.reverse_edges.remove(id) {
-                for edge in rev {
-                    if let Some(fwd) = self.forward_edges.get_mut(&edge.from) {
-                        fwd.retain(|e| &e.to != id);
-                    }
-                }
-            }
+            // Drop the reverse index entry but keep callers' forward edges dangling.
+            // detect_orphan (Phase 1.6) iterates those dangling edges to find
+            // callers of removed symbols; pruning them here would silently hide
+            // cascade failures.
+            self.reverse_edges.remove(id);
             self.centrality.remove(id);
         }
         self.library_imports.retain(|li| li.file != file);
@@ -244,6 +239,29 @@ mod tests {
         assert_eq!(g.forward_edges.get(&a.id).map(Vec::len), Some(1));
         assert_eq!(g.reverse_edges.get(&b.id).map(Vec::len), Some(1));
         assert_eq!(g.centrality.get(&b.id).copied(), Some(1));
+    }
+
+    #[test]
+    fn remove_file_preserves_caller_forward_edges_when_callee_removed() {
+        // When the callee's file is deleted, the caller's forward edge to it must
+        // remain — that dangling edge is how Phase 1.6's detect_orphan finds
+        // broken calls. Regression guard: fixing remove_file broke this on ccb9d49.
+        let mut g = CodeGraph::new();
+        let src = sym("a", "x.ts");
+        let dst = sym("b", "y.ts");
+        g.insert_symbol(src.clone());
+        g.insert_symbol(dst.clone());
+        g.insert_edge(edge(&src, &dst));
+
+        g.remove_file(std::path::Path::new("y.ts"));
+
+        // Callee is gone, reverse index for it is gone, but caller's forward edge
+        // to the (now-missing) callee is retained.
+        assert!(!g.symbols.contains_key(&dst.id));
+        assert!(!g.reverse_edges.contains_key(&dst.id));
+        let src_fwd = g.forward_edges.get(&src.id).expect("caller forward edges");
+        assert_eq!(src_fwd.len(), 1, "caller's forward edge to deleted callee must be kept");
+        assert_eq!(src_fwd[0].to, dst.id);
     }
 
     #[test]

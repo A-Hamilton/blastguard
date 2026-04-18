@@ -56,14 +56,5 @@ pub enum BlastGuardError {
     Other(#[from] anyhow::Error),
 }
 
-impl From<std::io::Error> for BlastGuardError {
-    fn from(source: std::io::Error) -> Self {
-        Self::Io {
-            path: PathBuf::new(),
-            source,
-        }
-    }
-}
-
 /// Library-scoped result alias.
 pub type Result<T> = std::result::Result<T, BlastGuardError>;

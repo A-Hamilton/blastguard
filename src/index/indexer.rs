@@ -12,6 +12,7 @@ use crate::Result;
 ///
 /// # Errors
 /// Surfaces I/O errors encountered while walking or reading source files.
+#[must_use = "cold index result should be used or persisted"]
 pub fn cold_index(_project_root: &Path) -> Result<CodeGraph> {
     // TODO(phase-1.4): walk with `ignore`, hash with BLAKE3, parse with rayon.
     Ok(CodeGraph::new())
@@ -23,6 +24,7 @@ pub fn cold_index(_project_root: &Path) -> Result<CodeGraph> {
 /// # Errors
 /// Returns an error if the cache is corrupt (caller should fall back to
 /// [`cold_index`]).
+#[must_use = "warm start result should be used"]
 pub fn warm_start(_project_root: &Path) -> Result<CodeGraph> {
     // TODO(phase-1.4): load cache, Merkle-diff, incremental reparse.
     Ok(CodeGraph::new())

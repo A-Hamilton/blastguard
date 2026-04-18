@@ -90,4 +90,21 @@ mod tests {
         s.record_symbol_edit(sym("b"));
         assert_eq!(s.edits_ago(&sym("b")), Some(0));
     }
+
+    #[test]
+    fn edits_ago_returns_none_for_unknown_symbol() {
+        let mut s = SessionState::new();
+        s.record_symbol_edit(sym("a"));
+        assert_eq!(s.edits_ago(&sym("nonexistent")), None);
+    }
+
+    #[test]
+    fn edits_ago_counts_edits_after_target() {
+        let mut s = SessionState::new();
+        s.record_symbol_edit(sym("a"));
+        s.record_symbol_edit(sym("b"));
+        // Last edit was "b"; "a" is 1 edit ago.
+        assert_eq!(s.edits_ago(&sym("a")), Some(1));
+        assert_eq!(s.edits_ago(&sym("b")), Some(0));
+    }
 }

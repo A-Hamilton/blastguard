@@ -10,6 +10,7 @@ use crate::graph::types::SymbolId;
 
 /// Cascade warning kind. Serialised as an uppercase tag in the MCP response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum WarningKind {
     Signature,
     AsyncChange,
@@ -62,3 +63,24 @@ impl Warning {
 // TODO(phase-1.6): implement diff_signatures, detect_async_flip, detect_orphan,
 // detect_interface_break. Each consumes an `old: &CodeGraph` and a
 // `new_symbol: &Symbol` (with the graph mutation not yet applied).
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn warning_kind_serialises_as_screaming_snake() {
+        assert_eq!(serde_json::to_string(&WarningKind::Signature).unwrap(), "\"SIGNATURE\"");
+        assert_eq!(serde_json::to_string(&WarningKind::AsyncChange).unwrap(), "\"ASYNC_CHANGE\"");
+        assert_eq!(serde_json::to_string(&WarningKind::Orphan).unwrap(), "\"ORPHAN\"");
+        assert_eq!(serde_json::to_string(&WarningKind::InterfaceBreak).unwrap(), "\"INTERFACE_BREAK\"");
+    }
+
+    #[test]
+    fn warning_kind_tag_matches_wire_format() {
+        assert_eq!(WarningKind::Signature.tag(), "SIGNATURE");
+        assert_eq!(WarningKind::AsyncChange.tag(), "ASYNC_CHANGE");
+        assert_eq!(WarningKind::Orphan.tag(), "ORPHAN");
+        assert_eq!(WarningKind::InterfaceBreak.tag(), "INTERFACE_BREAK");
+    }
+}
