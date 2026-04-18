@@ -1,3 +1,4 @@
+; TODO: function_expression (named function expression like `const foo = function named() {}`) — Phase 1 limitation
 ; Function declarations
 (function_declaration
   name: (identifier) @function.name) @function.decl
