@@ -109,15 +109,22 @@ UC Berkeley "BenchJack" `conftest.py` exploit (any change to `conftest.py`,
 - No Go support.
 - Semantic search (`around X`, embeddings) is a feature-flagged Phase 2 item.
 
-## Comparison
+## Related work
 
-| Tool | Graph retrieval | Cascade warnings | Test attribution | Open source | Stack |
-|---|---|---|---|---|---|
-| BlastGuard (this) | ✅ | ✅ | ✅ | ✅ (MIT) | Rust, rmcp 1.5 |
-| [WarpGrep v2](https://morphllm.com/blog/warpgrep-v2) | Retrieval only | — | — | — | closed |
-| [Auggie](https://www.augmentcode.com/blog/auggie-tops-swe-bench-pro) | Semantic only | — | — | — | closed |
-| [code-graph-mcp](https://github.com/sdsrss/code-graph-mcp) | ✅ | — | — | ✅ | Rust |
-| [Replay.io MCP](https://www.replay.io/) | — | — | Debug-focused | — | closed |
+BlastGuard sits in an ecosystem of tools exploring how to make AI coding
+agents more effective. Each of these tackles a different slice of the
+problem; none is a competitor so much as a neighbour.
+
+| Project | Focus | Open source |
+|---|---|---|
+| BlastGuard (this) | Graph retrieval + cascade warnings + test attribution | MIT |
+| [code-graph-mcp](https://github.com/sdsrss/code-graph-mcp) | Open-source AST graph MCP | MIT |
+| [WarpGrep v2](https://morphllm.com/blog/warpgrep-v2) | RL-trained search subagent | closed |
+| [Auggie](https://www.augmentcode.com/blog/auggie-tops-swe-bench-pro) | Semantic retrieval / context engine | closed |
+| [Replay.io MCP](https://www.replay.io/) | Runtime-debugging MCP | closed |
+
+If you're working on an adjacent project and want to cross-link, open a PR
+against this table.
 
 ## Documentation
 
