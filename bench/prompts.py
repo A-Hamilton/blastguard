@@ -47,6 +47,21 @@ Use native tools for: reading specific files you already know the path to,
 cross-file dependency exploration, writing brand-new files, running ad-hoc
 bash commands (`ls`, `cat`, env inspection). Do not re-grep for a symbol
 you can ask BlastGuard about.
+
+IMPORTANT — EFFICIENCY RULES:
+
+1. ONE TOOL PER QUESTION. If `blastguard_search 'outline of X'` already
+   shows the function you care about with its signature and line number,
+   that IS the answer — do NOT additionally `Read` the same file to
+   "confirm". The outline is authoritative.
+2. DON'T STACK TOOLS. Never call `blastguard_search` AND `Read` AND
+   `Grep` on the same target in one task unless each returned something
+   genuinely new. Pick the most specific tool first, then stop.
+3. ANSWER AS SOON AS YOU HAVE ENOUGH. The goal is a correct short answer
+   in minimum turns. If you already have the file:line and the signature,
+   you're done — write the answer and submit.
+4. Every extra turn costs tokens on ALL prior context. A 4-turn solve
+   is ~50% cheaper than a 6-turn solve. Aim for fewest turns.
 """
 
 # Legacy constants kept for backward compatibility with the old runner.
