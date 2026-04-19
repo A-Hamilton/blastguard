@@ -9,9 +9,10 @@ def test_raw_prompt_has_no_blastguard_references():
 
 def test_blastguard_prompt_includes_all_three_tools():
     p = build_system_prompt(arm="blastguard")
-    assert "blastguard__search" in p
-    assert "blastguard__apply_change" in p
-    assert "blastguard__run_tests" in p
+    # SWE-agent bundle exposes tools by their bin/ filename (single underscore).
+    assert "blastguard_search" in p
+    assert "blastguard_apply_change" in p
+    assert "blastguard_run_tests" in p
     assert "cascade" in p.lower()
 
 

@@ -18,26 +18,35 @@ Write `DONE` on a line by itself when your edit is complete.
 
 BLASTGUARD_BIAS = """
 
-You ALSO have access to the BlastGuard MCP, which is designed exactly for this
-task class. Strongly prefer BlastGuard tools over native alternatives in these
-situations:
+You ALSO have access to the BlastGuard MCP, which is designed for navigating
+and editing existing code. Strongly prefer BlastGuard tools over native
+alternatives in these situations:
 
-- Finding callers, callees, imports, tests, outlines of a symbol or file
-  → use `blastguard__search`. It returns structured graph data in 50-300
-  tokens instead of 10k+ from grep.
-- Editing a source file → use `blastguard__apply_change`. It surfaces
-  SIGNATURE / ASYNC_CHANGE / ORPHAN / INTERFACE_BREAK cascade warnings plus
-  a bundled context (callers + tests) in one response. Native Write/Edit
-  work but miss the cascade analysis.
-- Running tests → use `blastguard__run_tests`. It auto-detects the runner
-  (pytest / jest / cargo) and annotates failures with
-  "YOU MODIFIED X (N edits ago)" when the failing stack frame lands in code
-  you recently changed — this is how you tie a new regression back to your
-  own edit.
+- "What's in this file?" → `blastguard_search '{"query":"outline of PATH"}'`.
+  Returns every symbol's name + signature + line number in 50-300 tokens
+  instead of reading the entire file with cat/Read.
+- "Who calls this function?" (within the same file) →
+  `blastguard_search '{"query":"callers of NAME"}'`. Returns structured
+  caller list vs. 10k+ grep output. Phase 1 limitation: callers are
+  same-file only; for cross-file, fall back to grep.
+- "Where is this symbol defined?" →
+  `blastguard_search '{"query":"find NAME"}'`. Fuzzy name lookup over the
+  code graph, returns file:line + signature.
+- "What does this file expose publicly?" →
+  `blastguard_search '{"query":"exports of PATH"}'`. Visibility-filtered
+  symbol list.
+- Editing a source file where blast radius is unclear →
+  `blastguard_apply_change`. Surfaces SIGNATURE / ASYNC_CHANGE / ORPHAN /
+  INTERFACE_BREAK cascade warnings + a bundled context in one response.
+- Running tests after an edit → `blastguard_run_tests`. Auto-detects
+  pytest/jest/cargo and annotates failures with
+  "YOU MODIFIED X (N edits ago)" so you can tie regressions to your own
+  recent edits.
 
 Use native tools for: reading specific files you already know the path to,
-writing brand-new files, running ad-hoc bash commands (`ls`, `cat`, env
-inspection). Do not re-grep for a symbol you can ask BlastGuard about.
+cross-file dependency exploration, writing brand-new files, running ad-hoc
+bash commands (`ls`, `cat`, env inspection). Do not re-grep for a symbol
+you can ask BlastGuard about.
 """
 
 # Legacy constants kept for backward compatibility with the old runner.
