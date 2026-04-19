@@ -152,3 +152,81 @@ cargo build --release
 bench/.venv/bin/python -m bench.microbench
 # Results in bench/results/microbench.jsonl
 ```
+
+## Tuning trajectory (iterative micro-bench optimizations)
+
+After establishing round-2 as the baseline, we iterated on BlastGuard
+using the micro-bench as a regression harness. Each row is one change
+plus a re-run of the same 4 tasks on the same model (MiniMax M2.7 +
+BLASTGUARD_BIAS).
+
+| Round | Change                                            | BG cost | BG turns | BG in tok | BG calls | Δ vs prev (cost) |
+|---:|---------------------------------------------------|--------:|---------:|----------:|---------:|-----------------:|
+| 2  | (baseline — bundle advertised Phase-2 capabilities) | $0.0400 |    21    | 117,774   |    7     |  —               |
+| 3  | Phase-1-accurate bundle docstrings                | $0.0296 |    18    |  84,346   |    7     | −26%             |
+| 4  | Compressed MCP tool descriptions ~40%             | $0.0219 |    16    |  60,970   |    5     | −26%             |
+| 5  | Empty-hit hints redirect to grep                  | $0.0305 |    17    |  86,896   |    7     | **+39% (regress)** |
+
+**Cumulative (round 2 → round 5): BG cost −24%, input tokens −26%,
+turns −19%.** Round 4 is the current peak; round 5's empty-hit hints
+didn't help on this task mix.
+
+### What worked (rounds 3–4)
+
+1. **Tightening bundle docstrings to Phase-1-accurate** was the single
+   biggest intervention. The model had been calling BlastGuard for
+   `chain from X to Y` and cross-file callers — queries Phase 1 can't
+   answer. After narrowing the advertised surface area to the four
+   query types that work reliably (`outline of`, `find`, `exports of`,
+   `libraries`) and telling the model explicitly to prefer grep for
+   cross-file work, the `chain-search-to-graph` task's BG cost dropped
+   40% (it stopped thrashing on impossible BlastGuard queries before
+   falling back).
+
+2. **Compressing MCP tool descriptions ~40%** cut per-turn schema
+   overhead. The schema is sent on every turn, so saving 400-600
+   bytes/turn compounds across 16-21 turns per task. Round 4 data
+   shows −28% input tokens on the BG arm against no code behaviour
+   change — pure prompt-bytes savings.
+
+### What didn't work (round 5)
+
+Adding empty-hit hints (e.g., "no same-file callers in Phase 1 graph;
+for cross-file callers, use grep") to the `callers_of` / `imports_of`
+/ `tests_for` responses **regressed** the BG arm:
+
+- BG cost went **up** 39% vs round 4
+- Tool-call count went **up** from 5 to 7
+- The model appears to use the hint text as a cue to try *additional*
+  BlastGuard queries before pivoting to grep, rather than pivoting
+  immediately
+
+The hint code is left in place (see Task 5 in the plan) because the
+pattern is philosophically correct — returning structured fallback
+suggestions on empty responses — and may help with larger / different
+task mixes or models. At n=4 tasks, we cannot conclude hard-negative.
+
+### What the trajectory does NOT tell us
+
+- **Statistical significance.** 4 tasks × 1 run each is underpowered.
+  The round 5 regression could be noise; the round 3/4 wins could be
+  overstated. The tight model seed + task set gives us internal
+  consistency but not external validity.
+- **Cross-model generality.** Everything measured here is MiniMax M2.7
+  behaviour. Sonnet 4.6, Opus 4.7, and GLM-5.1 may use BlastGuard
+  differently.
+- **SWE-bench Pro lift.** The micro-bench tasks are repo-navigation
+  questions on this codebase; they're not hidden-dependency bug fixes
+  on downstream repos. See `bench/KNOWN_GAPS.md` Gap 5 for why a real
+  Pro run is still blocked upstream.
+
+### Total optimization spend
+
+- Round 3 re-run: ~$0.06
+- Round 4 re-run: ~$0.06
+- Round 5 re-run: ~$0.07
+- **Total across this tuning plan: ~$0.19.**
+
+Combined with prior micro-bench rounds 1-2 (\$0.087), the full
+measurement trajectory that produced the −24% cost reduction cost
+**~\$0.28**.
