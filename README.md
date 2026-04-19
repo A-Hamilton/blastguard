@@ -131,12 +131,14 @@ SWE-agent fixes or community contribution.
 
 ## Known limitations (Phase 1)
 
-- Cross-file *call* edges aren't resolved yet — cascade warnings surface
-  direct callers in the same file as the edited symbol only. As a Phase-1.5
-  bridge, `callers of X` also appends cross-file *importer hints* (files that
-  `use`/`import` the module containing X) so the agent knows exactly which
-  files to grep next. Full call-edge resolution across files is a Phase 2
-  item contingent on benchmark data.
+- Cross-file call resolution is **unambiguous-only** — when exactly one file
+  that a caller imports declares a symbol with the called name, the Calls
+  edge is rewritten to that file and the edge's confidence becomes
+  `Inferred`. When two or more imports declare the same name, the edge
+  stays `Unresolved` and `callers of X` falls back to listing the importer
+  files so the agent can grep them. A full type-aware resolver (follow
+  identifier origin through `from X import Y as Z` aliases and re-exports)
+  is a Phase 2 item contingent on benchmark data.
 - Dynamic dispatch (`getattr`, `obj[method]()`) gets `Confidence::Inferred` and
   surfaces to the agent with a caveat rather than being dropped.
 - No Go support.

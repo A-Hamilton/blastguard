@@ -83,22 +83,27 @@ pub fn callers_of(
         .map(SearchHit::structural)
         .collect();
 
-    // Cross-file importer hint (Phase-1.5): even though Phase 1 doesn't
-    // resolve which *function* across files calls `name`, we DO know which
-    // files import the file containing `name` (from the Phase-1.3 resolver).
-    // Appending those as "importer" hits gives the model targeted files to
-    // grep instead of re-querying BlastGuard repeatedly for data the Phase-1
-    // graph can't produce.
+    // Cross-file importer hint (Phase-1.5 fallback): when resolve_calls
+    // couldn't pin a function-level caller (ambiguous match or non-function
+    // reference like a type), at least tell the agent which files import
+    // the target's module so they can grep directly. Skip files that
+    // already produced a first-class caller hit above — those are
+    // redundant noise.
     let target_file = &target_id.file;
     let target_rel = target_file
         .strip_prefix(project_root)
         .unwrap_or(target_file);
+    let files_with_function_callers: std::collections::HashSet<std::path::PathBuf> =
+        hits.iter().map(|h| h.file.clone()).collect();
     let importer_hits = importers_of(graph, target_file);
     let mut seen_importers: std::collections::HashSet<std::path::PathBuf> =
         std::collections::HashSet::new();
     for hit in &importer_hits {
         if hit.file == *target_file {
             continue; // self-import impossible in practice; defensive
+        }
+        if files_with_function_callers.contains(&hit.file) {
+            continue; // we already surfaced the specific function; hint is noise
         }
         if !seen_importers.insert(hit.file.clone()) {
             continue; // one hint per importer file, not per import statement
@@ -454,6 +459,61 @@ mod tests {
         assert!(files.contains(&PathBuf::from("a.ts")));
         assert!(files.contains(&PathBuf::from("b.ts")));
         assert!(hits.iter().all(|h| h.signature.is_some()));
+    }
+
+    #[test]
+    fn callers_of_skips_importer_hint_when_function_caller_from_same_file() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind, SymbolKind};
+
+        let mut g = CodeGraph::new();
+        // login() lives in auth.ts.
+        let target = sym("login", "auth.ts");
+        // handle() in handler.ts calls login() — first-class Calls edge.
+        let caller = sym("handle", "handler.ts");
+        insert_with_centrality(&mut g, target.clone(), 0);
+        insert_with_centrality(&mut g, caller.clone(), 0);
+        g.insert_edge(Edge {
+            from: caller.id.clone(),
+            to: target.id.clone(),
+            kind: EdgeKind::Calls,
+            line: 5,
+            confidence: Confidence::Inferred,
+        });
+        // AND an Imports edge from handler.ts → auth.ts (would otherwise
+        // produce an importer hint pointing at the same file).
+        g.insert_edge(Edge {
+            from: SymbolId {
+                file: PathBuf::from("handler.ts"),
+                name: "handler".to_owned(),
+                kind: SymbolKind::Module,
+            },
+            to: SymbolId {
+                file: PathBuf::from("auth.ts"),
+                name: String::new(),
+                kind: SymbolKind::Module,
+            },
+            kind: EdgeKind::Imports,
+            line: 1,
+            confidence: Confidence::Certain,
+        });
+
+        let hits = callers_of(&g, "login", 10, std::path::Path::new("."));
+        // Exactly one hit: the function-level caller. The redundant
+        // importer hint for handler.ts must be suppressed.
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected 1 hit (function caller only, no duplicate importer hint); got {hits:?}"
+        );
+        assert_eq!(hits[0].file, PathBuf::from("handler.ts"));
+        assert!(
+            !hits[0]
+                .signature
+                .as_deref()
+                .is_some_and(|s| s.contains("cross-file importer")),
+            "first hit must be the function caller, not the importer hint: {:?}",
+            hits[0].signature
+        );
     }
 
     #[test]
