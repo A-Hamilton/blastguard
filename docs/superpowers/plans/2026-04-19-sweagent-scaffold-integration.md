@@ -117,7 +117,7 @@ git commit -m "bench: add sweagent + mcp deps and verification script"
 
 The bridge is a one-shot CLI: takes a tool name and JSON args on stdin/argv, spawns the `blastguard` binary (pointed at the workspace set by `$BLASTGUARD_PROJECT_ROOT`), sends one MCP `tools/call` request, prints the response, exits. No daemon.
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Create `bench/tests/test_bridge.py`:
 
@@ -189,14 +189,14 @@ def test_bridge_rejects_unknown_tool(tmp_path, monkeypatch):
     assert "unknown tool" in proc.stderr.lower()
 ```
 
-- [ ] **Step 2: Confirm failure**
+- [x] **Step 2: Confirm failure**
 
 ```bash
 cd /home/adam/Documents/blastguard/bench && uv run pytest tests/test_bridge.py -v
 ```
 Expected: FileNotFoundError or AttributeError — bridge.py doesn't exist yet.
 
-- [ ] **Step 3: Implement the bridge**
+- [x] **Step 3: Implement the bridge**
 
 Create `bench/bundles/blastguard/bridge.py`:
 
@@ -306,14 +306,14 @@ if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
 ```
 
-- [ ] **Step 4: Confirm tests pass**
+- [x] **Step 4: Confirm tests pass**
 
 ```bash
 cd /home/adam/Documents/blastguard/bench && uv run pytest tests/test_bridge.py -v
 ```
 Expected: 2 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bench/bundles/blastguard/bridge.py bench/tests/test_bridge.py
