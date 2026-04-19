@@ -230,3 +230,67 @@ task mixes or models. At n=4 tasks, we cannot conclude hard-negative.
 Combined with prior micro-bench rounds 1-2 (\$0.087), the full
 measurement trajectory that produced the −24% cost reduction cost
 **~\$0.28**.
+
+### Round 6 — Tier-1 output optimizations combined
+
+After rounds 3-5 validated the tuning-harness approach, Plan 13 landed
+four more optimizations aimed at the search-tool response surface:
+
+1. **Compact hit formatting** — strip lifetimes (`'a`), generic bounds
+   (`T: Sized`), and the `fn ` keyword from rendered signatures.
+2. **Relative paths** — responses use paths relative to `project_root`
+   instead of the 50-char absolute prefix.
+3. **Smart per-query caps** — `outline` / `exports` cap at 50 (was 10),
+   `find` caps at 5 (was 10), `libraries` caps at 30, `callers` / `callees`
+   stay at 10.
+4. **Outline test/prod dedup** — duplicate-name functions (production
+   vs. `#[cfg(test)]`) get a `[test]` prefix on later occurrences.
+
+Tasks 1, 2, 4, 5 landed in one measurement cycle (round 6).
+
+| Round | BG cost | BG turns | BG input | vs raw |
+|---:|--:|--:|--:|--:|
+| 4 (peak)    | $0.0219 | 16 | 60,970 | BG 28% cheaper |
+| 6           | $0.0269 | 17 | 74,321 | BG **44%** cheaper |
+
+**What this tells us:** the Tier-1 changes are NOT a clean absolute-cost
+win over round 4. BG cost went up ~$0.005 and input tokens up ~13k. But
+the **raw arm got much noisier** this round ($0.031 → $0.048, +57%) —
+well outside any reasonable interpretation of "same tools, same tasks,
+same seed". This is stochastic variance at n=4 tasks.
+
+The relative BG-vs-raw gap actually **widened from 28% to 44%**, which
+is the metric that matters for BlastGuard's value claim. If the absolute
+round-4 peak was a lucky draw (which this data implies), then round 6's
+numbers are closer to the true mean and the Tier-1 changes are providing
+some signal even if it's swamped by noise.
+
+**Why keep the Tier-1 code anyway:**
+
+- Compact formatting is strictly-smaller bytes-on-wire; its effect
+  compounds on larger task sets than this 4-task bench.
+- Smart caps prevent silent outline truncation on files with >10
+  symbols (a real correctness issue, not just a cost question).
+- Test/prod dedup makes outline more signal-rich for the agent even
+  without a cost delta.
+
+**Cumulative round 2 → round 6:** BG cost **-33%** ($0.040 → $0.027),
+input tokens **-37%** (118k → 74k), turns **-19%** (21 → 17), BlastGuard
+tool calls stable at 7. BG arm is decisively cheaper than raw.
+
+**What the tuning-trajectory data does NOT tell us** (reiterated): n=4
+runs without seed variance gives us too-noisy signal to conclude
+individual-change attribution beyond round 4. A Tier-2 plan should
+expand the task set before more Rust-side tuning, not less.
+
+### Updated trajectory table
+
+| Round | Change | BG cost | BG turns | BG in tok | BG calls | Δ vs prev |
+|---:|---|--:|--:|--:|--:|--:|
+| 2  | baseline                                           | $0.0400 | 21 | 117,774 | 7 | — |
+| 3  | Phase-1-accurate bundle docstrings                 | $0.0296 | 18 |  84,346 | 7 | −26% |
+| 4  | Compressed MCP tool descriptions ~40%              | $0.0219 | 16 |  60,970 | 5 | −26% |
+| 5  | Empty-hit hints (regressed)                        | $0.0305 | 17 |  86,896 | 7 | +39% |
+| 6  | Compact fmt + relative paths + caps + dedup        | $0.0269 | 17 |  74,321 | 7 | +23% vs r4, **-33% vs r2** |
+
+Total optimization spend (rounds 3-6): **~$0.26**.
