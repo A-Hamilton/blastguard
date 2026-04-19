@@ -75,6 +75,20 @@ IMPORTANT — EFFICIENCY RULES:
    you're done — write the answer and DONE.
 4. Every extra turn costs tokens on ALL prior context. A 4-turn solve
    is ~50% cheaper than a 6-turn solve. Aim for fewest turns.
+
+STEP-TYPE CLASSIFICATION (before EVERY tool call):
+
+Classify each step as reflexive or deliberative:
+- REFLEXIVE: the answer is already in the conversation context — a prior
+  tool result already contains what you need. DO NOT call a tool. Write
+  the answer directly.
+- DELIBERATIVE: you need information you genuinely do not have yet. Call
+  a tool.
+
+Before any tool call, state `step: deliberative — need X because Y` in
+one short line. If the step is reflexive, skip the tool call entirely
+and go straight to the answer. This classification is mandatory — it is
+the single biggest defense against redundant tool chains.
 """
 
 
@@ -215,22 +229,21 @@ def _blastguard_call(*, tool_name: str, json_args: str, project_root: str, binar
     return (proc.stdout or "").strip()[:10_000]
 
 
+# Tool descriptions are deliberately minimal — per arXiv:2602.14878, verbose
+# examples and overlapping parameter-explanation prose can increase execution
+# steps ~67% without improving accuracy. Keep purpose + supported values only.
 BLASTGUARD_TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "blastguard_search",
             "description": (
-                "AST-graph query over the project. Pass a single JSON arg with key 'query'. "
-                "Verified Phase 1 queries: 'outline of PATH' (all symbols in a file + signatures), "
-                "'callers of NAME' (same-file callers), 'find NAME' (fuzzy symbol lookup), "
-                "'exports of PATH' (public symbols), 'libraries' (external + internal package list)."
+                "Query AST code graph. query values: 'outline of PATH', 'find NAME', "
+                "'callers of NAME', 'exports of PATH', 'libraries'."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Natural-language structural query"}
-                },
+                "properties": {"query": {"type": "string"}},
                 "required": ["query"],
             },
         },
@@ -239,11 +252,7 @@ BLASTGUARD_TOOLS = [
         "type": "function",
         "function": {
             "name": "blastguard_apply_change",
-            "description": (
-                "Apply edits to a file with cascade-warning analysis. JSON args: "
-                "{'file': 'path', 'changes': [{'old_text': '...', 'new_text': '...'}]}. "
-                "Returns SIGNATURE/ASYNC_CHANGE/ORPHAN/INTERFACE_BREAK warnings + callers/tests context."
-            ),
+            "description": "Apply edits to a file with cascade warnings.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -258,11 +267,7 @@ BLASTGUARD_TOOLS = [
         "type": "function",
         "function": {
             "name": "blastguard_run_tests",
-            "description": (
-                "Run the project's test suite (auto-detects pytest/jest/cargo). "
-                "JSON args: {'path': 'optional subpath'}. Failures are annotated with "
-                "'YOU MODIFIED X' when a stack frame hits a recently-edited symbol."
-            ),
+            "description": "Run tests (auto-detects pytest/jest/cargo).",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
