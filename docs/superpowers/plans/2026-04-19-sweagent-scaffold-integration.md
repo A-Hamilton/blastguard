@@ -1348,7 +1348,7 @@ rm -rf /home/adam/Documents/blastguard/bench/results/mock-raw /home/adam/Documen
 **Files:**
 - Modify: `bench/README.md`
 
-- [ ] **Step 1: Replace workflow section**
+- [x] **Step 1: Replace workflow section**
 
 Read the existing `bench/README.md`. Find the `## Workflow (Plan 8)` section and rewrite it as `## Workflow (Plan 9 — SWE-agent scaffold)` containing:
 
@@ -1422,7 +1422,7 @@ Budget per `--budget-usd` is a hard ceiling — the runner aborts mid-run
 if the next call would exceed it.
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add bench/README.md
