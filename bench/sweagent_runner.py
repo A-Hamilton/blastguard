@@ -70,6 +70,23 @@ def _sweagent_cmd() -> list[str]:
     return ["sweagent", "run"]
 
 
+def _model_is_mapped_in_litellm(model: str) -> bool:
+    """Return True if LiteLLM knows how to price this model.
+
+    LiteLLM's `model_cost` table covers only a subset of providers/models.
+    Unmapped models trigger SWE-agent's ModelConfigurationError unless we
+    disable its cost tracking. We do our own cost tracking in bench.budget,
+    so bypassing SWE-agent's is safe.
+    """
+    try:
+        import litellm  # noqa: PLC0415
+
+        litellm.get_model_info(model)
+        return True
+    except Exception:  # noqa: BLE001 — any lookup failure = unmapped
+        return False
+
+
 def _build_config_yaml(
     *,
     arm: str,
@@ -85,72 +102,68 @@ def _build_config_yaml(
     reproducibility.  arm=blastguard adds the BlastGuard bundle to
     agent.tools.bundles; arm=raw does not.
     """
-    bundles: list[dict[str, Any]] = []
-
-    # Include the default SWE-agent tool registry if the repo is present.
-    registry = _SWEAGENT_REPO / "tools" / "registry"
-    if registry.exists():
-        bundles.append({"path": str(registry)})
-
-    if arm == "blastguard":
-        bundles.append({"path": str(BUNDLE_PATH)})
-
-    # LiteLLM's cost tracking covers paid models but not free-tier or unlisted
-    # models. When the model isn't in its price table, SWE-agent raises
-    # ModelConfigurationError unless both cost limits are 0 (disabling the
-    # safety check). Free-tier models (`:free` suffix) have $0 spend by
-    # construction — override both caps to 0 so the harness proceeds.
+    # LiteLLM's price table covers only a subset of models. SWE-agent raises
+    # ModelConfigurationError for any model it can't price unless both cost
+    # limits are 0. We detect unmapped models at config-gen time and bypass
+    # SWE-agent's cost tracking — our own bench.budget tracks spend via the
+    # trajectory's token counts after each task. Free-tier (`:free` suffix)
+    # models also bypass since they cost $0 anyway.
     is_free_tier = model.endswith(":free")
-    effective_per_instance_limit = 0.0 if is_free_tier else per_instance_cost_limit
+    is_litellm_mapped = _model_is_mapped_in_litellm(model)
+    bypass_cost_tracking = is_free_tier or not is_litellm_mapped
+    effective_per_instance_limit = 0.0 if bypass_cost_tracking else per_instance_cost_limit
     effective_total_limit = 0.0
 
-    # System template carries arm-specific steering (BLASTGUARD_BIAS on BG arm).
-    # instance_template injects the SWE-bench problem statement via {{problem_statement}}.
-    # Without these, the agent receives empty prompts and makes nonsense tool
-    # calls until SWE-agent exits on format errors.
-    from bench.prompts import build_system_prompt  # noqa: PLC0415
+    # Start from SWE-agent's default.yaml so we inherit its carefully-crafted
+    # system_template, instance_template, tool-registry bundles (including
+    # `submit`, `edit_anthropic`, and the filemap state script), and history
+    # processors. Overriding these from scratch (our earlier attempt) left the
+    # agent without the `submit` tool — it kept invoking `submit` via bash
+    # until hitting the turn limit.
+    default_config_path = _SWEAGENT_REPO / "config" / "default.yaml"
+    if default_config_path.exists():
+        config: dict[str, Any] = yaml.safe_load(default_config_path.read_text()) or {}
+    else:
+        config = {}
 
-    system_template = build_system_prompt(arm=arm)
-    instance_template = (
-        "<uploaded_files>\n"
-        "{{working_dir}}\n"
-        "</uploaded_files>\n"
-        "Consider the following SWE-bench Pro task:\n\n"
-        "<task>\n"
-        "{{problem_statement}}\n"
-        "</task>\n\n"
-        "Make the minimal edits required to make the fail-to-pass tests "
-        "pass without breaking any pass-to-pass tests. When your edit is "
-        "complete, call the submit command."
-    )
-    next_step_template = "OBSERVATION:\n{{observation}}"
+    agent_cfg = config.setdefault("agent", {})
+    tools_cfg = agent_cfg.setdefault("tools", {})
+    bundles_cfg: list[dict[str, Any]] = tools_cfg.setdefault("bundles", [])
 
-    config: dict[str, Any] = {
-        "agent": {
-            "templates": {
-                "system_template": system_template,
-                "instance_template": instance_template,
-                "next_step_template": next_step_template,
-            },
-            "model": {
-                "name": model,
-                "api_key": f"${api_key_env}",
-                "api_base": api_base,
-                "per_instance_cost_limit": effective_per_instance_limit,
-                "total_cost_limit": effective_total_limit,
-                "temperature": 0.0,
-                "max_input_tokens": 200000,
-                "max_output_tokens": 8192,
-            },
-            "tools": {
-                "bundles": bundles,
-                "enable_bash_tool": True,
-                "parse_function": {"type": "function_calling"},
-            },
-        },
+    # Ensure bundle paths are absolute (defaults are relative to the repo root).
+    resolved: list[dict[str, Any]] = []
+    for b in bundles_cfg:
+        p = Path(b["path"])
+        if not p.is_absolute():
+            p = _SWEAGENT_REPO / p
+        resolved.append({"path": str(p)})
+    bundles_cfg = resolved
+
+    if arm == "blastguard":
+        bundles_cfg.append({"path": str(BUNDLE_PATH)})
+    tools_cfg["bundles"] = bundles_cfg
+
+    # Append BlastGuard steering to the default system_template; don't replace
+    # it — the default carries rules the registry bundle relies on.
+    if arm == "blastguard":
+        from bench.prompts import BLASTGUARD_BIAS  # noqa: PLC0415
+
+        templates = agent_cfg.setdefault("templates", {})
+        base_sys = templates.get("system_template", "")
+        templates["system_template"] = base_sys + "\n\n" + BLASTGUARD_BIAS
+
+    # Model config overrides (OpenRouter routing + cost bypass).
+    agent_cfg["model"] = {
+        "name": model,
+        "api_key": f"${api_key_env}",
+        "api_base": api_base,
+        "per_instance_cost_limit": effective_per_instance_limit,
+        "total_cost_limit": effective_total_limit,
+        "temperature": 0.0,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
     }
 
-    # Include base config reference if default.yaml exists.
     config_path = output_dir / f"sweagent-{arm}.yaml"
     config_path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
     return config_path
@@ -262,8 +275,6 @@ def run_arm(
             env["BLASTGUARD_BINARY"] = str(blastguard_binary)
 
     rate_limit_sleep = int(os.environ.get("BENCH_RATE_LIMIT_SLEEP", "60"))
-    instance_dir = output_dir / task.task_id
-    traj_path = instance_dir / f"{task.task_id}.traj"
     last_proc: subprocess.CompletedProcess[str] | None = None
 
     for attempt in (1, 2):
@@ -275,7 +286,7 @@ def run_arm(
             text=True,
             check=False,
         )
-        if traj_path.exists():
+        if _find_trajectory_file(output_dir) is not None:
             break
         # Retry once on rate-limit signals; any other failure falls through.
         if attempt == 1 and "rate" in last_proc.stderr.lower():
@@ -283,7 +294,8 @@ def run_arm(
             continue
         break
 
-    if not traj_path.exists():
+    traj_path = _find_trajectory_file(output_dir)
+    if traj_path is None:
         assert last_proc is not None
         raise FileNotFoundError(
             f"sweagent exited {last_proc.returncode} and wrote no trajectory for "
@@ -291,13 +303,29 @@ def run_arm(
             f"stderr:\n{last_proc.stderr[:2000]}"
         )
 
-    patch, tokens, exit_status = _parse_trajectory(instance_dir, task.task_id)
+    # SWE-agent hashes the task_id into a short subdirectory name (e.g.
+    # "verify-synthetic-add-bug" → "2c862e/") — so instance_dir and the
+    # filename stem come from the trajectory file, not task.task_id.
+    instance_dir = traj_path.parent
+    instance_stem = traj_path.stem
+    patch, tokens, exit_status = _parse_trajectory(instance_dir, instance_stem)
     return ArmResult(
         patch=patch,
         tokens=tokens,
         trajectory_path=traj_path,
         exit_status=exit_status,
     )
+
+
+def _find_trajectory_file(output_dir: Path) -> Path | None:
+    """Return the first `*.traj` file under *output_dir* (or None).
+
+    SWE-agent derives the per-instance subdirectory name via a short hash of
+    the instance_id, which we can't reproduce easily. Globbing is reliable:
+    each run emits exactly one trajectory file in exactly one subdirectory.
+    """
+    matches = list(output_dir.glob("*/*.traj"))
+    return matches[0] if matches else None
 
 
 def _patch_bundle_path(config_path: Path, bundle_path: Path) -> None:
