@@ -486,13 +486,13 @@ Smart defaults:
 - `libraries`: 30 (covers typical project)
 - `grep` fallback: 30 (unchanged per spec)
 
-- [ ] **Step 1: Locate the cap usage**
+- [x] **Step 1: Locate the cap usage**
 
 Run: `grep -n 'DEFAULT_MAX_HITS\|max_hits' src/search/ -r`
 
 Inspect `src/search/dispatcher.rs` — the constant is likely there and is passed into structural calls.
 
-- [ ] **Step 2: Introduce per-arm caps**
+- [x] **Step 2: Introduce per-arm caps**
 
 Replace the single `DEFAULT_MAX_HITS` constant in `src/search/dispatcher.rs` with a small function:
 
@@ -538,7 +538,7 @@ match classify(query) {
 }
 ```
 
-- [ ] **Step 3: Add a unit test**
+- [x] **Step 3: Add a unit test**
 
 Append to `src/search/dispatcher.rs` tests module:
 
@@ -591,17 +591,17 @@ fn find_respects_5_hit_cap() {
 }
 ```
 
-- [ ] **Step 4: Run the new tests**
+- [x] **Step 4: Run the new tests**
 
 Run: `cargo test --lib search::dispatcher 2>&1 | tail -10`
 Expected: 7 passed (5 prior + 2 new).
 
-- [ ] **Step 5: Run the full suite + clippy**
+- [x] **Step 5: Run the full suite + clippy**
 
 Run: `cargo test --lib 2>&1 | tail -3 && cargo clippy --all-targets -- -W clippy::pedantic -D warnings 2>&1 | tail -3`
 Expected: all tests pass, clippy clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/search/dispatcher.rs
@@ -629,11 +629,11 @@ reduces find-fuzzy-match noise.
 
 Pragmatic approach: detect when two hits share the same function name and they're in the same file, and mark the one at a higher line number (typically the test) with a `[test]` prefix. Or, simpler: tag any symbol whose `line_start` falls inside a range that has a previous `#[cfg(test)]` marker. The first approach is cheaper.
 
-- [ ] **Step 1: Read the current outline_of**
+- [x] **Step 1: Read the current outline_of**
 
 Run: `sed -n '/pub fn outline_of/,/^}/p' src/search/structural.rs`
 
-- [ ] **Step 2: Write a failing test**
+- [x] **Step 2: Write a failing test**
 
 Append to `src/search/structural.rs` tests module:
 
@@ -681,12 +681,12 @@ fn sym_at(name: &str, file: &std::path::Path, line: u32) -> Symbol {
 }
 ```
 
-- [ ] **Step 3: Confirm test fails**
+- [x] **Step 3: Confirm test fails**
 
 Run: `cargo test --lib outline_of_tags_duplicate 2>&1 | tail -5`
 Expected: assertion failure — the test tag isn't added.
 
-- [ ] **Step 4: Implement the tagging**
+- [x] **Step 4: Implement the tagging**
 
 In `src/search/structural.rs::outline_of`, after collecting and sorting hits, walk them and mark duplicates:
 
@@ -728,17 +728,17 @@ fn extract_fn_name(sig: &str) -> String {
 }
 ```
 
-- [ ] **Step 5: Run the new test**
+- [x] **Step 5: Run the new test**
 
 Run: `cargo test --lib outline_of_tags_duplicate 2>&1 | tail -5`
 Expected: PASS.
 
-- [ ] **Step 6: Run full suite + clippy**
+- [x] **Step 6: Run full suite + clippy**
 
 Run: `cargo test --lib 2>&1 | tail -3 && cargo clippy --all-targets -- -W clippy::pedantic -D warnings 2>&1 | tail -3`
 Expected: all tests pass (count grew by 1 vs Task 4), clippy clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/search/structural.rs

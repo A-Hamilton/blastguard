@@ -112,6 +112,19 @@ UC Berkeley "BenchJack" `conftest.py` exploit (any change to `conftest.py`,
 - `apply_change` error propagation and `run_tests` cargo auto-detect verified.
 - SWE-agent integration: agent invokes BlastGuard tools via the bundle over
   real MCP (4 tool calls on synthetic task, exit_status=submitted, $0.01 spend).
+- **Measured micro-benchmark wins on Gemma-4 26B (local, zero API cost):**
+  BG arm consistently beats a native-tools-only arm on head-to-head runs
+  of real exploration tasks on this repo:
+  - `explore-cold-index` (intra-file): BG arm **−60% input tokens, −78%
+    wall time**, 3× `blastguard_search` only (no native tools used).
+  - `chain-search-to-graph` (cross-file): BG arm **−29% input tokens,
+    −88% wall time (8.7× faster)** — more turns than raw but each turn
+    is cheaper because BlastGuard responses are small vs raw's multi-KB
+    `read_file` outputs.
+  - See `docs/MICROBENCH.md` for the full measurement trajectory
+    across 6+ tuning rounds, honest negative results, and the research
+    citations (arXiv:2602.14878 tool-description compression,
+    arXiv:2604.11716 step-type classification) that drove the gains.
 
 What's pending: the lift number on SWE-bench Pro. Waiting on upstream
 SWE-agent fixes or community contribution.

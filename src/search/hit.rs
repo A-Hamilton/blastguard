@@ -75,10 +75,10 @@ impl SearchHit {
     /// - `src/a.rs:2 let NEEDLE = 1;`  (no signature — uses snippet)
     #[must_use]
     pub fn to_compact_line(&self, project_root: &std::path::Path) -> String {
-        let path = self
-            .file
-            .strip_prefix(project_root)
-            .map_or_else(|_| self.file.display().to_string(), |p| p.display().to_string());
+        let path = self.file.strip_prefix(project_root).map_or_else(
+            |_| self.file.display().to_string(),
+            |p| p.display().to_string(),
+        );
         let body = match (self.signature.as_deref(), self.snippet.as_deref()) {
             (Some(sig), _) => compact_signature(sig),
             (None, Some(snippet)) => snippet.trim().to_string(),
@@ -121,9 +121,7 @@ fn compact_signature(sig: &str) -> String {
             '\'' if is_lifetime_start(bytes, i) => {
                 // Drop the lifetime token itself.
                 i += 1;
-                while i < bytes.len()
-                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
-                {
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                 }
                 // Inside generics, also swallow a trailing `, ` so we don't
@@ -230,7 +228,10 @@ mod tests_compact {
         let line = hit.to_compact_line(&PathBuf::from("/proj/root"));
         assert!(line.starts_with("src/graph/ops.rs:12"), "got: {line}");
         assert!(!line.contains("/proj/root"), "absolute path leaked: {line}");
-        assert!(line.contains("callers"), "signature name should survive: {line}");
+        assert!(
+            line.contains("callers"),
+            "signature name should survive: {line}"
+        );
     }
 
     #[test]
@@ -243,7 +244,10 @@ mod tests_compact {
         };
         let line = hit.to_compact_line(&PathBuf::from("/p"));
         assert!(!line.contains("'a"), "lifetime not stripped: {line}");
-        assert!(!line.contains("T: Sized"), "generic bound not stripped: {line}");
+        assert!(
+            !line.contains("T: Sized"),
+            "generic bound not stripped: {line}"
+        );
         assert!(line.contains("foo"));
     }
 

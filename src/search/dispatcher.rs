@@ -42,8 +42,7 @@ pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<Sear
         QueryKind::Callers(name) => structural::callers_of(graph, &name, CALLERS_MAX_HITS),
         QueryKind::Callees(name) => structural::callees_of(graph, &name, CALLEES_MAX_HITS),
         QueryKind::Outline(path) => {
-            let mut hits =
-                structural::outline_of(graph, &resolve_query_path(project_root, &path));
+            let mut hits = structural::outline_of(graph, &resolve_query_path(project_root, &path));
             hits.truncate(OUTLINE_MAX_HITS);
             hits
         }
@@ -55,8 +54,7 @@ pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<Sear
             structural::importers_of(graph, &resolve_query_path(project_root, &path))
         }
         QueryKind::ExportsOf(path) => {
-            let mut hits =
-                structural::exports_of(graph, &resolve_query_path(project_root, &path));
+            let mut hits = structural::exports_of(graph, &resolve_query_path(project_root, &path));
             hits.truncate(EXPORTS_MAX_HITS);
             hits
         }

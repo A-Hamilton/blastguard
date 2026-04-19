@@ -611,7 +611,10 @@ mod tests {
         let hits = tests_for(&g, "processRequest");
         // No importers at all → hint; just verifies it doesn't panic.
         assert_eq!(hits.len(), 1);
-        assert!(hits[0].signature.as_deref().is_some_and(|s| s.contains("grep")));
+        assert!(hits[0]
+            .signature
+            .as_deref()
+            .is_some_and(|s| s.contains("grep")));
     }
 
     #[test]
@@ -663,13 +666,21 @@ mod tests {
         // The later one should be tagged.
         let tagged = hits.iter().find(|h| h.line == 100).expect("hit at 100");
         assert!(
-            tagged.signature.as_deref().unwrap_or("").starts_with("[test]"),
+            tagged
+                .signature
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("[test]"),
             "expected [test] tag, got: {:?}",
             tagged.signature
         );
         // The earlier one should NOT be tagged.
         let untagged = hits.iter().find(|h| h.line == 10).expect("hit at 10");
-        assert!(!untagged.signature.as_deref().unwrap_or("").starts_with("[test]"));
+        assert!(!untagged
+            .signature
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("[test]"));
     }
 
     #[test]

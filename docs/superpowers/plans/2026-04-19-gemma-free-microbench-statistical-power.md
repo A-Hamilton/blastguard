@@ -322,7 +322,7 @@ cleanly here, those tasks would need to fall back to MiniMax M2.7."
 
 The 6 new tasks cover deliberately diverse patterns: one more intra-file exploration (BlastGuard's sweet spot), two cross-file investigations (where Phase 1 loses), two "modify without breaking" edits (cascade territory), and one test-suite-oriented question (`run_tests` attribution).
 
-- [ ] **Step 1: Create `bench/tasks_registry.py` with the full 10-task list**
+- [x] **Step 1: Create `bench/tasks_registry.py` with the full 10-task list**
 
 ```python
 """Centralized registry of micro-bench tasks.
@@ -450,7 +450,7 @@ TASKS: list[dict[str, str]] = [
 ]
 ```
 
-- [ ] **Step 2: Update microbench.py to import TASKS from the registry**
+- [x] **Step 2: Update microbench.py to import TASKS from the registry**
 
 In `bench/microbench.py`, replace the inline `TASKS = [...]` block with:
 
@@ -460,7 +460,7 @@ from bench.tasks_registry import TASKS
 
 Keep the import near the top, after the standard-lib imports and before the native-tool implementations.
 
-- [ ] **Step 3: Add a unit test confirming the registry loads**
+- [x] **Step 3: Add a unit test confirming the registry loads**
 
 Create `bench/tests/test_tasks_registry.py`:
 
@@ -496,17 +496,17 @@ def test_task_ids_are_filesystem_safe():
         )
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cd bench && HF_HOME=/tmp/hf uv run pytest tests/test_tasks_registry.py -v`
 Expected: 3 PASS.
 
-- [ ] **Step 5: Verify the microbench still loads without error**
+- [x] **Step 5: Verify the microbench still loads without error**
 
 Run: `bench/.venv/bin/python -c "from bench.microbench import TASKS; print(len(TASKS), 'tasks loaded'); [print(' ', t['id']) for t in TASKS]"`
 Expected: `10 tasks loaded` followed by all 10 ids.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add bench/tasks_registry.py bench/microbench.py bench/tests/test_tasks_registry.py
@@ -540,7 +540,7 @@ Added 3 unit tests (test_tasks_registry.py) to catch registry drift."
 
 **Why:** Manual eyeballing of round deltas at n=4 was the core methodological weakness of Plans 12-13. With multi-seed / multi-task data we need proper aggregation: mean, stddev, 95% CI per `(task, arm)` cell, and arm-level aggregates that respect the paired structure (same tasks, same seeds, only the arm differs).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `bench/tests/test_stats_aggregate.py`:
 
@@ -634,12 +634,12 @@ def test_arm_totals_computes_paired_ci(tmp_path: Path):
     assert totals["paired_diff"]["ci95_low"] > 0.0
 ```
 
-- [ ] **Step 2: Confirm the tests fail**
+- [x] **Step 2: Confirm the tests fail**
 
 Run: `cd bench && uv run pytest tests/test_stats_aggregate.py -v`
 Expected: all 3 FAIL with `ModuleNotFoundError: bench.stats_aggregate`.
 
-- [ ] **Step 3: Implement `bench/stats_aggregate.py`**
+- [x] **Step 3: Implement `bench/stats_aggregate.py`**
 
 ```python
 """Multi-seed / multi-task micro-bench aggregation.
@@ -832,17 +832,17 @@ def render_markdown_report(runs: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cd bench && uv run pytest tests/test_stats_aggregate.py -v`
 Expected: all 3 PASS.
 
-- [ ] **Step 5: Lint clean**
+- [x] **Step 5: Lint clean**
 
 Run: `cd bench && uv run ruff check bench/stats_aggregate.py bench/tests/test_stats_aggregate.py`
 Expected: `All checks passed!`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add bench/stats_aggregate.py bench/tests/test_stats_aggregate.py
