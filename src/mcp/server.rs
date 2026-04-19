@@ -102,24 +102,26 @@ impl BlastGuardServer {
 
 #[tool_router]
 impl BlastGuardServer {
-    /// Dispatch a search query to the AST graph or regex grep backend.
+    /// Query the project's AST code graph.
     ///
-    /// # Errors
+    /// Phase 1 supports: `outline of PATH` (all symbols in a file),
+    /// `find NAME` (fuzzy symbol lookup), `exports of PATH` (public symbols),
+    /// `libraries` (external/internal package list), `callers of NAME`
+    /// (same-file only), and `grep <pattern>` fallback.
     ///
-    /// Returns `Err(CallToolResult)` only when the `spawn_blocking` join fails
-    /// (effectively unreachable in practice). Phase 1 graph/grep paths are
-    /// infallible; Phase 2 semantic search may introduce real error paths.
+    /// Returns 50-300 tokens of structured graph data instead of 10K+ from raw
+    /// grep. Prefer this over native Grep for structural queries; use Grep for
+    /// free-text search across files.
     #[tool(
         name = "search",
-        description = "AST-graph search with inline signatures. USE THIS INSTEAD OF Grep/Bash grep \
-when the query is structural: 'callers of X', 'callees of X', 'outline of FILE', \
-'chain from X to Y', 'imports of FILE', 'importers of FILE', 'exports of FILE', \
-'tests for FILE|symbol', 'libraries', or 'find X' / 'where is X' (exact + fuzzy \
-name lookup ranked by centrality). Returns file:line with the matching \
-function's full signature so follow-up Read is rarely needed. Falls back to \
-regex grep (cap 30) when no structural pattern matches — use native Grep only \
-for plain text searches with no code-structure intent. Typical cost: 50-300 \
-tokens vs. 2000-8000 for equivalent file reads.",
+        description = "Query the project's AST code graph. \
+Phase 1 supports: `outline of PATH` (all symbols in a file), \
+`find NAME` (fuzzy symbol lookup), `exports of PATH` (public symbols), \
+`libraries` (external/internal package list), `callers of NAME` \
+(same-file only), and `grep <pattern>` fallback. \
+Returns 50-300 tokens of structured graph data instead of 10K+ from raw \
+grep. Prefer this over native Grep for structural queries; use Grep for \
+free-text search across files.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -156,25 +158,24 @@ tokens vs. 2000-8000 for equivalent file reads.",
         Ok(Json(SearchResponse { hits: lines }))
     }
 
-    /// Apply text replacements to a file on disk, returning cascade warnings and bundled context.
+    /// Apply one or more edits to a file with same-file cascade warnings.
     ///
-    /// # Errors
+    /// Returns SIGNATURE / ASYNC_CHANGE / ORPHAN / INTERFACE_BREAK warnings
+    /// for callers in the same file plus their signatures. Multi-change edits
+    /// roll back atomically on mid-sequence failure.
     ///
-    /// Returns a `CallToolResult` with `is_error: true` when the edit fails
-    /// (ambiguous match, edit not found, I/O error, or parse failure). The
-    /// `content` block carries the `BlastGuardError::Display` string.
+    /// Prefer over native Edit/Write when editing a signature or removing a
+    /// public symbol — the cascade warnings surface same-file blast radius
+    /// immediately. For cross-file blast radius, follow up with grep.
     #[tool(
         name = "apply_change",
-        description = "Edit with cascade analysis. USE THIS INSTEAD OF Edit/Write when the \
-change could affect callers, implementors, or interfaces — signature changes, \
-sync→async flips, symbol renames/removals, trait/interface method additions. \
-Writes immediately (no approval gate) and returns in ONE response: cascade \
-warnings (SIGNATURE, ASYNC_CHANGE, ORPHAN, INTERFACE_BREAK) naming exactly \
-which callers/implementors may break, plus a bundled context listing up to \
-10 callers with inline signatures and the test files importing the edited \
-file. A single apply_change typically replaces 4-8 follow-up Grep+Read calls. \
-For trivial one-line fixes (typos, constant values, comment tweaks) the \
-native Edit tool is fine — use apply_change when blast radius is unclear.",
+        description = "Apply one or more edits to a file with same-file cascade warnings. \
+Returns SIGNATURE / ASYNC_CHANGE / ORPHAN / INTERFACE_BREAK warnings \
+for callers in the same file plus their signatures. Multi-change edits \
+roll back atomically on mid-sequence failure. \
+Prefer over native Edit/Write when editing a signature or removing a \
+public symbol — the cascade warnings surface same-file blast radius \
+immediately. For cross-file blast radius, follow up with grep.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -204,24 +205,17 @@ native Edit tool is fine — use apply_change when blast radius is unclear.",
         }
     }
 
-    /// Run the project's test suite and return attributed failure summaries.
+    /// Run the project's test suite (auto-detects jest / vitest / pytest / cargo).
     ///
-    /// # Errors
-    ///
-    /// Returns a `CallToolResult` with `is_error: true` on `NoTestRunner`,
-    /// `TestTimeout`, or `TestCrashed`. Normal failing tests (non-zero exit
-    /// with parseable output) return `Ok` with `failed > 0`.
+    /// Failures are annotated with `YOU MODIFIED X (N edits ago)` when a
+    /// failing stack frame lands inside a symbol the session recently edited
+    /// via apply_change. Use after an edit to tie regressions to recent work.
     #[tool(
         name = "run_tests",
-        description = "Run tests with failure-to-edit attribution. USE THIS INSTEAD OF running \
-jest/pytest/cargo via Bash when you've made source edits this session. \
-Auto-detects jest / vitest / pytest / cargo from project files. Parses the \
-runner's output and — this is the unique value — annotates each failure with \
-'YOU MODIFIED X in file:line (N edits ago)' when a stack-trace frame lands \
-inside a symbol you recently edited via apply_change. This closes the \
-feedback loop: an agent reading a failure message sees immediately which of \
-its own changes caused it. Use native Bash for tests only when you need \
-runner-specific flags this tool doesn't expose.",
+        description = "Run the project's test suite (auto-detects jest / vitest / pytest / cargo). \
+Failures are annotated with `YOU MODIFIED X (N edits ago)` when a \
+failing stack frame lands inside a symbol the session recently edited \
+via apply_change. Use after an edit to tie regressions to recent work.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
