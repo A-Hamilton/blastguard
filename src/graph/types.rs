@@ -166,6 +166,40 @@ impl CodeGraph {
         *self.centrality.entry(to).or_insert(0) += 1;
     }
 
+    /// Re-attach dangling incoming edges whose `to` now points at a symbol
+    /// in `file`. `remove_file` intentionally keeps other files' forward
+    /// edges in place for ORPHAN detection — that means the reverse index
+    /// is missing entries for edges pointing at symbols that were deleted
+    /// and then re-inserted (e.g. `apply_change`'s reparse cycle). Without
+    /// this rebuild, `callers()` returns empty immediately after an edit
+    /// even though cross-file callers still exist.
+    pub fn restitch_reverse_edges_for_file(&mut self, file: &std::path::Path) {
+        let Some(ids) = self.file_symbols.get(file).cloned() else {
+            return;
+        };
+        let id_set: std::collections::HashSet<SymbolId> = ids.into_iter().collect();
+
+        let mut to_restitch: Vec<Edge> = Vec::new();
+        for edges in self.forward_edges.values() {
+            for edge in edges {
+                if id_set.contains(&edge.to) {
+                    to_restitch.push(edge.clone());
+                }
+            }
+        }
+
+        for edge in to_restitch {
+            let rev = self.reverse_edges.entry(edge.to.clone()).or_default();
+            if !rev.iter().any(|e| {
+                e.from == edge.from && e.kind == edge.kind && e.line == edge.line
+            }) {
+                let to_key = edge.to.clone();
+                rev.push(edge);
+                *self.centrality.entry(to_key).or_insert(0) += 1;
+            }
+        }
+    }
+
     /// Remove every symbol and edge belonging to `file`. Used by the file
     /// watcher when a file is deleted and by the incremental reindexer before
     /// re-parsing a changed file.

@@ -255,7 +255,9 @@ pub fn orchestrate(
     };
     let new_symbols = parse_out.symbols.clone();
 
-    // 4. Update the graph: drop old file entries, insert new.
+    // 4. Update the graph: drop old file entries, insert new, then
+    //    re-resolve and re-stitch so cross-file callers survive the
+    //    remove/re-insert cycle.
     {
         let mut g = graph.lock().expect("graph lock poisoned");
         g.remove_file(&file);
@@ -266,6 +268,15 @@ pub fn orchestrate(
             g.insert_edge(edge);
         }
         g.library_imports.extend(parse_out.library_imports);
+
+        // The newly parsed edges are Unresolved; re-run the resolver so
+        // they get real file paths and Confidence::Certain / Inferred.
+        crate::parse::resolve::resolve_imports(&mut g, project_root);
+        crate::parse::resolve::resolve_calls(&mut g);
+        // Other files' forward edges pointing at the edited symbols are
+        // kept as dangling by remove_file (for ORPHAN detection). Re-attach
+        // them to reverse_edges so callers() finds cross-file callers.
+        g.restitch_reverse_edges_for_file(&file);
     }
 
     // 5. Diff old symbols vs new symbols.
