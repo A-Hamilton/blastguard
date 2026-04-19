@@ -36,6 +36,8 @@ sweagent = { git = "https://github.com/SWE-agent/SWE-agent.git", rev = "v1.1.0" 
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["tests"]
+norecursedirs = ["results", ".sweagent-repo", ".evaluator", ".venv", "bundles"]
 
 [tool.ruff]
 line-length = 100

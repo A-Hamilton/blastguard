@@ -43,6 +43,28 @@ _SWEAGENT_REPO = Path(__file__).resolve().parent / ".sweagent-repo"
 _DEFAULT_BASE_CONFIG = _SWEAGENT_REPO / "config" / "default.yaml"
 
 
+# Manual price overrides for models LiteLLM doesn't know.
+# Per-token USD; OpenRouter pricing as of 2026-04. When a model is listed
+# here we inject `input_cost_per_token` / `output_cost_per_token` into
+# `completion_kwargs` so LiteLLM can calculate cost and SWE-agent's
+# `per_instance_cost_limit` fires as a real circuit breaker.
+MODEL_PRICING_USD_PER_TOKEN: dict[str, tuple[float, float]] = {
+    "openrouter/minimax/minimax-m2.7": (0.30e-6, 1.20e-6),
+    "openrouter/minimax/minimax-m2.5": (0.30e-6, 1.20e-6),
+    "openrouter/minimax/minimax-m2.1": (0.30e-6, 1.20e-6),
+    "openrouter/z-ai/glm-4.6": (0.15e-6, 0.60e-6),
+    "openrouter/z-ai/glm-4.5-air": (0.075e-6, 0.30e-6),
+    "openrouter/anthropic/claude-opus-4-7": (15.0e-6, 75.0e-6),
+    "openrouter/anthropic/claude-sonnet-4-6": (3.0e-6, 15.0e-6),
+}
+
+# Hard cap on turns per task. Prevents runaway 100+ step exploration loops
+# that burn millions of tokens without converging. 40 is a reasonable bound
+# for SWE-bench Pro — harder tasks converge within 30-35, anything beyond
+# 40 is almost always looping.
+DEFAULT_PER_INSTANCE_CALL_LIMIT = 40
+
+
 @dataclass(frozen=True, slots=True)
 class ArmResult:
     """Result of a single SWE-agent arm invocation."""
@@ -110,8 +132,14 @@ def _build_config_yaml(
     # models also bypass since they cost $0 anyway.
     is_free_tier = model.endswith(":free")
     is_litellm_mapped = _model_is_mapped_in_litellm(model)
-    bypass_cost_tracking = is_free_tier or not is_litellm_mapped
-    effective_per_instance_limit = 0.0 if bypass_cost_tracking else per_instance_cost_limit
+    manual_pricing = MODEL_PRICING_USD_PER_TOKEN.get(model)
+
+    # Cost cap is enforced at the SWE-agent layer whenever we can price the
+    # model (either via LiteLLM's table or our manual override). When we
+    # can't price it (e.g. brand-new free model), fall back to turn-cap
+    # + our own post-hoc Budget.record().
+    can_enforce_cost_cap = is_litellm_mapped or manual_pricing is not None
+    effective_per_instance_limit = per_instance_cost_limit if can_enforce_cost_cap and not is_free_tier else 0.0
     effective_total_limit = 0.0
 
     # Start from SWE-agent's default.yaml so we inherit its carefully-crafted
@@ -152,17 +180,30 @@ def _build_config_yaml(
         base_sys = templates.get("system_template", "")
         templates["system_template"] = base_sys + "\n\n" + BLASTGUARD_BIAS
 
-    # Model config overrides (OpenRouter routing + cost bypass).
-    agent_cfg["model"] = {
+    # Model config overrides (OpenRouter routing + cost cap + turn cap).
+    model_cfg: dict[str, Any] = {
         "name": model,
         "api_key": f"${api_key_env}",
         "api_base": api_base,
         "per_instance_cost_limit": effective_per_instance_limit,
         "total_cost_limit": effective_total_limit,
+        "per_instance_call_limit": DEFAULT_PER_INSTANCE_CALL_LIMIT,
         "temperature": 0.0,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
     }
+
+    # Inject manual pricing via completion_kwargs when LiteLLM doesn't know
+    # the model but we do. This makes SWE-agent's per_instance_cost_limit a
+    # real circuit breaker instead of an untracked $0 → infinite spend path.
+    if manual_pricing is not None and not is_litellm_mapped:
+        in_cost, out_cost = manual_pricing
+        model_cfg["completion_kwargs"] = {
+            "input_cost_per_token": in_cost,
+            "output_cost_per_token": out_cost,
+        }
+
+    agent_cfg["model"] = model_cfg
 
     config_path = output_dir / f"sweagent-{arm}.yaml"
     config_path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
@@ -276,26 +317,38 @@ def run_arm(
 
     rate_limit_sleep = int(os.environ.get("BENCH_RATE_LIMIT_SLEEP", "60"))
     last_proc: subprocess.CompletedProcess[str] | None = None
+    timed_out = False
 
     for attempt in (1, 2):
-        last_proc = subprocess.run(
-            args,
-            env=env,
-            timeout=timeout_seconds,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            last_proc = subprocess.run(
+                args,
+                env=env,
+                timeout=timeout_seconds,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            # Don't lose the trajectory SWE-agent wrote up to the timeout —
+            # it carries real cost/token counts that our Budget must record,
+            # plus any partial submission the agent autosubmitted on exit.
+            timed_out = True
+            break
         if _find_trajectory_file(output_dir) is not None:
             break
-        # Retry once on rate-limit signals; any other failure falls through.
-        if attempt == 1 and "rate" in last_proc.stderr.lower():
+        if attempt == 1 and last_proc is not None and "rate" in last_proc.stderr.lower():
             time.sleep(rate_limit_sleep)
             continue
         break
 
     traj_path = _find_trajectory_file(output_dir)
     if traj_path is None:
+        if timed_out:
+            raise RuntimeError(
+                f"sweagent timed out after {timeout_seconds}s on {task.task_id!r} "
+                f"and wrote no trajectory file. No cost was captured."
+            )
         assert last_proc is not None
         raise FileNotFoundError(
             f"sweagent exited {last_proc.returncode} and wrote no trajectory for "
@@ -309,6 +362,10 @@ def run_arm(
     instance_dir = traj_path.parent
     instance_stem = traj_path.stem
     patch, tokens, exit_status = _parse_trajectory(instance_dir, instance_stem)
+    if timed_out:
+        # Override so compare.py's pair_results() treats this as infra_failure
+        # rather than a legitimate per-task outcome.
+        exit_status = "sweagent_timeout"
     return ArmResult(
         patch=patch,
         tokens=tokens,
