@@ -344,9 +344,22 @@ def run_task(
 ) -> RunResult:
     from openai import OpenAI  # noqa: PLC0415
 
-    tools = NATIVE_TOOLS[:]
     if arm == "blastguard":
+        # On the BG arm, hide `read_file` and `grep` entirely — their use cases
+        # (read a file / search for a string) are covered by `blastguard_search`
+        # outline / find queries. Keep `bash` as a fallback so the model can
+        # still run ad-hoc commands (cat, find, rg) when BlastGuard doesn't
+        # have what it needs (e.g. cross-file dependencies, Phase 2 territory).
+        #
+        # This is a deliberate departure from the "bias, don't force" principle
+        # in CodeCompass — we tried bias via prompt language and the model
+        # stacked tools redundantly on easy tasks. Removing the redundant
+        # natives is a hard constraint that forces the tool-choice pattern the
+        # prompt was asking for.
+        tools = [t for t in NATIVE_TOOLS if t["function"]["name"] == "bash"]
         tools += BLASTGUARD_TOOLS
+    else:
+        tools = NATIVE_TOOLS[:]
 
     # 10-minute per-request timeout + 5 SDK-level retries. Local Gemma can
     # stall briefly on big prompts; we'd rather wait than crash the whole run.
