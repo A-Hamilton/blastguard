@@ -39,7 +39,9 @@ fn resolve_query_path(project_root: &Path, path: &Path) -> PathBuf {
 pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<SearchHit> {
     match classify(query) {
         QueryKind::Find(name) => structural::find(graph, &name, FIND_MAX_HITS),
-        QueryKind::Callers(name) => structural::callers_of(graph, &name, CALLERS_MAX_HITS),
+        QueryKind::Callers(name) => {
+            structural::callers_of(graph, &name, CALLERS_MAX_HITS, project_root)
+        }
         QueryKind::Callees(name) => structural::callees_of(graph, &name, CALLEES_MAX_HITS),
         QueryKind::Outline(path) => {
             let mut hits = structural::outline_of(graph, &resolve_query_path(project_root, &path));
@@ -47,9 +49,11 @@ pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<Sear
             hits
         }
         QueryKind::Chain(from, to) => structural::chain_from_to(graph, &from, &to),
-        QueryKind::ImportsOf(path) => {
-            structural::imports_of(graph, &resolve_query_path(project_root, &path))
-        }
+        QueryKind::ImportsOf(path) => structural::imports_of(
+            graph,
+            &resolve_query_path(project_root, &path),
+            project_root,
+        ),
         QueryKind::ImportersOf(path) => {
             structural::importers_of(graph, &resolve_query_path(project_root, &path))
         }

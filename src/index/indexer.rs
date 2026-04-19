@@ -86,6 +86,10 @@ pub fn cold_index(project_root: &Path) -> Result<CodeGraph> {
         graph.library_imports.extend(out.library_imports);
     }
 
+    // Resolve internal Imports edges (crate::/./) to real file paths so
+    // callers_of / importers_of can cross files.
+    crate::parse::resolve::resolve_imports(&mut graph, project_root);
+
     // Persist the fresh cache so the next run can warm-start. Best-effort:
     // a write failure should not cause the caller's index to fail.
     let mut file_hashes = HashMap::new();
@@ -224,6 +228,11 @@ pub fn warm_start(project_root: &Path) -> Result<CodeGraph> {
         }
         graph.library_imports.extend(out.library_imports);
     }
+
+    // New files may have introduced unresolved Imports edges during reparse.
+    // Cheaper than persisting the resolved state across warm starts and
+    // keeps resolver logic in one place.
+    crate::parse::resolve::resolve_imports(&mut graph, project_root);
 
     // Persist the updated cache.
     let mut tree_hashes = HashMap::new();

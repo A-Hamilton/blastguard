@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{BlastGuardError, Result};
+use crate::graph::types::{CodeGraph, Confidence, EdgeKind, SymbolId};
 
 /// Result of import resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,14 +297,20 @@ pub fn resolve_rs(project_root: &Path, _from_file: &Path, spec: &str) -> Resolve
             if tail.is_empty() {
                 return ResolveResult::Unresolved;
             }
-            let rel: PathBuf = tail.iter().collect();
-            let candidates = [
-                project_root.join("src").join(&rel).with_extension("rs"),
-                project_root.join("src").join(&rel).join("mod.rs"),
-            ];
-            for c in candidates {
-                if c.is_file() {
-                    return ResolveResult::Internal(c);
+            // Walk tail prefixes longest → shortest. `use crate::config::Config`
+            // should resolve to `src/config.rs` when no `src/config/Config.rs`
+            // exists — the trailing segments are items (types / fns), not
+            // modules.
+            for len in (1..=tail.len()).rev() {
+                let rel: PathBuf = tail[..len].iter().collect();
+                let candidates = [
+                    project_root.join("src").join(&rel).with_extension("rs"),
+                    project_root.join("src").join(&rel).join("mod.rs"),
+                ];
+                for c in candidates {
+                    if c.is_file() {
+                        return ResolveResult::Internal(c);
+                    }
                 }
             }
             ResolveResult::Unresolved
@@ -313,6 +320,88 @@ pub fn resolve_rs(project_root: &Path, _from_file: &Path, spec: &str) -> Resolve
             library: head.to_owned(),
             symbols: Vec::new(),
         },
+    }
+}
+
+/// Walk every `EdgeKind::Imports` edge with [`Confidence::Unresolved`] and
+/// attempt to rewrite `to.file` to a real on-disk path, upgrading the edge to
+/// [`Confidence::Certain`] on success. Edges whose `from` file is not a
+/// supported language — or whose spec cannot be resolved — are left untouched.
+///
+/// The spec text for each edge lives in `edge.to.file` (the parsers stash the
+/// raw `use crate::foo` / `"./utils"` string there until resolution happens).
+/// After resolution, `to.file` points at the resolved module file and
+/// `importers_of(file)` / cross-file callers hints become usable.
+///
+/// # Why this lives in the indexer pipeline
+/// Parsers run per-file and do not know the project root, tsconfig, or which
+/// modules exist — resolving in the parser would require threading all three
+/// through every worker. Doing it here is O(edges) and runs once per
+/// cold/warm index.
+pub fn resolve_imports(graph: &mut CodeGraph, project_root: &Path) {
+    let tsconfig = load_tsconfig(project_root).ok().flatten();
+
+    // Phase 1: collect rewrites so we don't mutate while iterating.
+    let mut rewrites: Vec<(SymbolId, usize, PathBuf)> = Vec::new();
+    for (from_id, edges) in &graph.forward_edges {
+        for (idx, edge) in edges.iter().enumerate() {
+            if edge.kind != EdgeKind::Imports || edge.confidence != Confidence::Unresolved {
+                continue;
+            }
+            let spec = edge.to.file.to_string_lossy();
+            let ext = from_id
+                .file
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let result = match ext {
+                "rs" => resolve_rs(project_root, &from_id.file, &spec),
+                "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => {
+                    resolve_ts(project_root, &from_id.file, &spec, tsconfig.as_ref())
+                }
+                _ => continue,
+            };
+            if let ResolveResult::Internal(new_path) = result {
+                rewrites.push((from_id.clone(), idx, new_path));
+            }
+        }
+    }
+
+    // Phase 2: apply each rewrite — update forward_edges in place, move the
+    // edge in reverse_edges from old_to to new_to, fix centrality.
+    for (from_id, idx, new_path) in rewrites {
+        let Some(edges) = graph.forward_edges.get_mut(&from_id) else {
+            continue;
+        };
+        let Some(edge) = edges.get_mut(idx) else {
+            continue;
+        };
+        let old_to = edge.to.clone();
+        if old_to.file == new_path {
+            continue;
+        }
+        let mut new_to = old_to.clone();
+        new_to.file = new_path;
+        edge.to = new_to.clone();
+        edge.confidence = Confidence::Certain;
+        let updated_edge = edge.clone();
+
+        if let Some(rev_list) = graph.reverse_edges.get_mut(&old_to) {
+            rev_list.retain(|e| !(e.from == from_id && e.kind == EdgeKind::Imports));
+            if rev_list.is_empty() {
+                graph.reverse_edges.remove(&old_to);
+            }
+        }
+        graph
+            .reverse_edges
+            .entry(new_to.clone())
+            .or_default()
+            .push(updated_edge);
+
+        if let Some(c) = graph.centrality.get_mut(&old_to) {
+            *c = c.saturating_sub(1);
+        }
+        *graph.centrality.entry(new_to).or_insert(0) += 1;
     }
 }
 
@@ -630,11 +719,150 @@ mod tests {
     }
 
     #[test]
+    fn resolves_rust_type_import_by_walking_back_to_module() {
+        // `use crate::config::Config` → Config is a type, not a module.
+        // Expect resolution to fall back to src/config.rs.
+        let tmp = tempdir_with(&[("src/main.rs", ""), ("src/config.rs", "")]);
+        let from = tmp.path().join("src/main.rs");
+        let r = resolve_rs(tmp.path(), &from, "crate::config::Config");
+        assert_eq!(r, ResolveResult::Internal(tmp.path().join("src/config.rs")));
+    }
+
+    #[test]
     fn bare_crate_without_path_is_unresolved() {
         let tmp = tempdir_with(&[("src/main.rs", "")]);
         let from = tmp.path().join("src/main.rs");
         // `use crate;` has no tail segment — ambiguous.
         let r = resolve_rs(tmp.path(), &from, "crate");
         assert_eq!(r, ResolveResult::Unresolved);
+    }
+
+    // ── resolve_imports (graph-wide post-parse pass) ──────────────────────────
+
+    #[test]
+    fn resolve_imports_upgrades_rust_crate_edge_to_certain() {
+        use crate::graph::types::{Edge, EdgeKind, SymbolId, SymbolKind};
+
+        let tmp = tempdir_with(&[("src/main.rs", ""), ("src/utils.rs", "")]);
+        let main_rs = tmp.path().join("src/main.rs");
+        let utils_rs = tmp.path().join("src/utils.rs");
+
+        let mut graph = CodeGraph::new();
+        // Mirror what rust.rs emits: to.file is the raw "crate::utils" text.
+        graph.insert_edge(Edge {
+            from: SymbolId {
+                file: main_rs.clone(),
+                name: "main".to_owned(),
+                kind: SymbolKind::Module,
+            },
+            to: SymbolId {
+                file: PathBuf::from("crate::utils"),
+                name: String::new(),
+                kind: SymbolKind::Module,
+            },
+            kind: EdgeKind::Imports,
+            line: 1,
+            confidence: Confidence::Unresolved,
+        });
+
+        resolve_imports(&mut graph, tmp.path());
+
+        let edges = graph.forward_edges.values().flatten().collect::<Vec<_>>();
+        assert_eq!(edges.len(), 1, "expected exactly one edge");
+        assert_eq!(edges[0].to.file, utils_rs, "to.file should be resolved");
+        assert_eq!(
+            edges[0].confidence,
+            Confidence::Certain,
+            "edge should be upgraded to Certain"
+        );
+
+        // Reverse index must be keyed by the NEW to (resolved file).
+        let resolved_key = SymbolId {
+            file: utils_rs.clone(),
+            name: String::new(),
+            kind: SymbolKind::Module,
+        };
+        assert!(
+            graph.reverse_edges.contains_key(&resolved_key),
+            "reverse_edges should be rekeyed to the resolved file"
+        );
+        // Stale key should be gone.
+        let stale_key = SymbolId {
+            file: PathBuf::from("crate::utils"),
+            name: String::new(),
+            kind: SymbolKind::Module,
+        };
+        assert!(
+            !graph.reverse_edges.contains_key(&stale_key),
+            "stale reverse_edges entry should be removed"
+        );
+    }
+
+    #[test]
+    fn resolve_imports_leaves_unresolvable_edges_alone() {
+        use crate::graph::types::{Edge, EdgeKind, SymbolId, SymbolKind};
+
+        let tmp = tempdir_with(&[("src/main.rs", "")]);
+        let main_rs = tmp.path().join("src/main.rs");
+
+        let mut graph = CodeGraph::new();
+        graph.insert_edge(Edge {
+            from: SymbolId {
+                file: main_rs.clone(),
+                name: "main".to_owned(),
+                kind: SymbolKind::Module,
+            },
+            to: SymbolId {
+                file: PathBuf::from("crate::does_not_exist"),
+                name: String::new(),
+                kind: SymbolKind::Module,
+            },
+            kind: EdgeKind::Imports,
+            line: 1,
+            confidence: Confidence::Unresolved,
+        });
+
+        resolve_imports(&mut graph, tmp.path());
+
+        let edges = graph.forward_edges.values().flatten().collect::<Vec<_>>();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(
+            edges[0].to.file,
+            PathBuf::from("crate::does_not_exist"),
+            "unresolvable spec should remain untouched"
+        );
+        assert_eq!(edges[0].confidence, Confidence::Unresolved);
+    }
+
+    #[test]
+    fn resolve_imports_upgrades_ts_relative_edge() {
+        use crate::graph::types::{Edge, EdgeKind, SymbolId, SymbolKind};
+
+        let tmp = tempdir_with(&[("src/handler.ts", ""), ("src/utils/auth.ts", "")]);
+        let handler = tmp.path().join("src/handler.ts");
+        let auth = tmp.path().join("src/utils/auth.ts");
+
+        let mut graph = CodeGraph::new();
+        graph.insert_edge(Edge {
+            from: SymbolId {
+                file: handler.clone(),
+                name: "handler".to_owned(),
+                kind: SymbolKind::Module,
+            },
+            to: SymbolId {
+                file: PathBuf::from("./utils/auth"),
+                name: String::new(),
+                kind: SymbolKind::Module,
+            },
+            kind: EdgeKind::Imports,
+            line: 1,
+            confidence: Confidence::Unresolved,
+        });
+
+        resolve_imports(&mut graph, tmp.path());
+
+        let edges = graph.forward_edges.values().flatten().collect::<Vec<_>>();
+        assert_eq!(edges[0].to.file, auth);
+        assert_eq!(edges[0].confidence, Confidence::Certain);
     }
 }

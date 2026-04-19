@@ -52,8 +52,16 @@ pub fn callers_of_id(graph: &CodeGraph, id: &SymbolId, max_hits: usize) -> Vec<S
 /// Resolves `name` to the most-central exact-match symbol, then returns its
 /// direct callers sorted by their own centrality descending, capped at
 /// `max_hits`.
+///
+/// `project_root` is only used to render the cross-file importer hint's
+/// embedded target path as relative — pass the indexed project root.
 #[must_use]
-pub fn callers_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
+pub fn callers_of(
+    graph: &CodeGraph,
+    name: &str,
+    max_hits: usize,
+    project_root: &std::path::Path,
+) -> Vec<SearchHit> {
     let mut targets = find_by_name(graph, name);
     if targets.is_empty() {
         return vec![SearchHit::empty_hint(&format!(
@@ -82,6 +90,9 @@ pub fn callers_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchH
     // grep instead of re-querying BlastGuard repeatedly for data the Phase-1
     // graph can't produce.
     let target_file = &target_id.file;
+    let target_rel = target_file
+        .strip_prefix(project_root)
+        .unwrap_or(target_file);
     let importer_hits = importers_of(graph, target_file);
     let mut seen_importers: std::collections::HashSet<std::path::PathBuf> =
         std::collections::HashSet::new();
@@ -97,7 +108,7 @@ pub fn callers_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchH
             line: hit.line,
             signature: Some(format!(
                 "cross-file importer — file imports `{}`; grep `{name}` here for call sites",
-                target_file.display()
+                target_rel.display()
             )),
             snippet: None,
         });
@@ -150,24 +161,31 @@ pub fn chain_from_to(graph: &CodeGraph, from_name: &str, to_name: &str) -> Vec<S
 }
 
 /// `imports of FILE` — files that `file` imports (forward Imports edges).
+///
+/// Iterates `forward_edges` keyed on any symbol whose `file == file` — NOT
+/// just `file_symbols[file]`. The parsers emit Imports edges from a synthetic
+/// `SymbolKind::Module` symbol that is never inserted into `file_symbols`, so
+/// restricting the lookup to `file_symbols` would miss every real import.
+///
+/// `project_root` is used to render each hit's target path relative.
 #[must_use]
-pub fn imports_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
-    let Some(sym_ids) = graph.file_symbols.get(file) else {
-        return vec![SearchHit::empty_hint(
-            "no internal imports in Phase 1 graph; use grep for \"use X::\"",
-        )];
-    };
+pub fn imports_of(
+    graph: &CodeGraph,
+    file: &std::path::Path,
+    project_root: &std::path::Path,
+) -> Vec<SearchHit> {
     let mut hits = Vec::new();
-    for sid in sym_ids {
-        let Some(edges) = graph.forward_edges.get(sid) else {
+    for (from_id, edges) in &graph.forward_edges {
+        if from_id.file != file {
             continue;
-        };
+        }
         for e in edges {
             if e.kind == EdgeKind::Imports {
+                let rel = e.to.file.strip_prefix(project_root).unwrap_or(&e.to.file);
                 hits.push(SearchHit {
                     file: e.to.file.clone(),
                     line: e.line,
-                    signature: Some(format!("imports {}", e.to.file.display())),
+                    signature: Some(format!("imports {}", rel.display())),
                     snippet: None,
                 });
             }
@@ -431,7 +449,7 @@ mod tests {
             });
         }
 
-        let hits = callers_of(&g, "target", 10);
+        let hits = callers_of(&g, "target", 10, std::path::Path::new("."));
         let files: Vec<_> = hits.iter().map(|h| h.file.clone()).collect();
         assert!(files.contains(&PathBuf::from("a.ts")));
         assert!(files.contains(&PathBuf::from("b.ts")));
@@ -441,7 +459,7 @@ mod tests {
     #[test]
     fn callers_of_empty_when_target_missing() {
         let g = CodeGraph::new();
-        let hits = callers_of(&g, "nonexistent", 10);
+        let hits = callers_of(&g, "nonexistent", 10, std::path::Path::new("."));
         assert_eq!(hits.len(), 1);
         assert!(hits[0]
             .signature
@@ -469,7 +487,7 @@ mod tests {
             });
         }
 
-        let hits = callers_of(&g, "target", 5);
+        let hits = callers_of(&g, "target", 5, std::path::Path::new("."));
         assert_eq!(hits.len(), 5);
     }
 
@@ -586,7 +604,7 @@ mod tests {
             confidence: Confidence::Unresolved,
         });
 
-        let imports = imports_of(&g, std::path::Path::new("a.ts"));
+        let imports = imports_of(&g, std::path::Path::new("a.ts"), std::path::Path::new("."));
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].file, PathBuf::from("b.ts"));
 
@@ -747,7 +765,7 @@ mod tests {
     fn callers_of_returns_hint_when_no_callers_found() {
         let mut g = CodeGraph::new();
         g.insert_symbol(sym("orphan", "a.rs"));
-        let hits = callers_of(&g, "orphan", 10);
+        let hits = callers_of(&g, "orphan", 10, std::path::Path::new("."));
         assert_eq!(hits.len(), 1);
         let hint = hits[0].signature.as_deref().expect("hint signature");
         assert!(hint.contains("cross-file"));
@@ -800,7 +818,7 @@ mod tests {
             });
         }
 
-        let hits = callers_of(&g, "foo", 10);
+        let hits = callers_of(&g, "foo", 10, std::path::Path::new("."));
         // No intra-file callers; the two importers should surface as hints.
         assert_eq!(
             hits.len(),
@@ -852,7 +870,7 @@ mod tests {
         assert_eq!(find_hits[0].file, PathBuf::from("hi.ts"));
 
         // `callers of target` orders hi before lo because hi has centrality 100.
-        let caller_hits = callers_of(&g, "target", 10);
+        let caller_hits = callers_of(&g, "target", 10, std::path::Path::new("."));
         assert_eq!(caller_hits[0].file, PathBuf::from("hi.ts"));
         assert_eq!(caller_hits[1].file, PathBuf::from("lo.ts"));
     }
