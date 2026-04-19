@@ -162,3 +162,67 @@ async fn apply_change_tool_returns_status_and_summary() {
         "old text still in file, got: {new_content}"
     );
 }
+
+#[tokio::test]
+async fn run_tests_tool_response_has_shape_when_cargo_available() {
+    use blastguard::runner::RunTestsRequest;
+    use rmcp::handler::server::wrapper::Parameters;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project_root = tmp.path().to_path_buf();
+
+    std::fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"bg_mcp_test_fixture\"\nversion = \"0.0.1\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
+    std::fs::create_dir_all(project_root.join("src")).expect("mkdir");
+    std::fs::write(
+        project_root.join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             use super::*;\n\
+             #[test]\n\
+             fn ok_one() { assert_eq!(add(1, 2), 3); }\n\
+             #[test]\n\
+             fn will_fail() { assert_eq!(add(1, 1), 3); }\n\
+         }\n",
+    )
+    .expect("write lib.rs");
+
+    let server = BlastGuardServer::new(CodeGraph::new(), project_root, Config::default());
+
+    // cargo test -- --format json requires nightly; on stable the runner
+    // returns an error. Mirror the opportunistic pattern from
+    // tests/integration_run_tests.rs: skip assertions on err / zero counts.
+    let resp = match server
+        .run_tests_tool(Parameters(RunTestsRequest {
+            filter: None,
+            timeout_seconds: 120,
+        }))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("run_tests_tool err (skipping on stable / cargo unavailable): {e:?}");
+            return;
+        }
+    };
+
+    let body = resp.0;
+    if body.passed + body.failed + body.skipped == 0 {
+        eprintln!("zero counts — skipping assertions");
+        return;
+    }
+    // Response-shape regression guard: field types + failure-line format.
+    assert!(body.passed >= 1, "expected >=1 pass: {body:?}");
+    assert!(body.failed >= 1, "expected >=1 fail: {body:?}");
+    for line in &body.failures {
+        assert!(
+            line.starts_with("FAIL "),
+            "failure line should start with 'FAIL ': {line:?}"
+        );
+    }
+    assert!(body.duration_ms > 0, "duration should be non-zero");
+}
