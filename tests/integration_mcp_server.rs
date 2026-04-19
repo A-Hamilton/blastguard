@@ -34,15 +34,71 @@ async fn server_boots_on_duplex_transport_without_panicking() {
 }
 
 #[tokio::test]
-#[ignore = "TODO: requires a JSON-RPC client fixture; round-6 micro-bench is the real gate (plan 13 task 2 step 3)"]
-async fn search_response_uses_compact_format() {
-    // Spin up a minimal in-process MCP server against a small fixture project
-    // that has a known symbol. Send a tools/call for search. Assert the
-    // response JSON contains relative paths (no "/home/") and doesn't include
-    // lifetime syntax ('a, 'g).
-    //
-    // Implementation deferred — the unit tests in src/search/hit.rs::tests_compact
-    // cover to_compact_line in isolation, and the live binary smoke-check in the
-    // plan's Step 4 verifies end-to-end correctness before the round-6 bench.
-    todo!("implement when JSON-RPC client fixture is available")
+async fn search_response_hits_are_compact_and_path_relative() {
+    use blastguard::graph::types::{Symbol, SymbolId, SymbolKind, Visibility};
+    use blastguard::mcp::server::SearchRequest;
+    use rmcp::handler::server::wrapper::Parameters;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project_root = tmp.path().to_path_buf();
+
+    // Seed a graph with one symbol under the project root. The to_compact_line
+    // renderer is expected to (1) strip the project_root prefix from the path
+    // and (2) drop lifetime / generic-bound syntax from the signature.
+    let mut graph = CodeGraph::new();
+    let file = project_root.join("src/graph/ops.rs");
+    graph.insert_symbol(Symbol {
+        id: SymbolId {
+            file: file.clone(),
+            name: "callers".to_string(),
+            kind: SymbolKind::Function,
+        },
+        line_start: 12,
+        line_end: 16,
+        signature: "fn callers<'g>(graph: &'g CodeGraph, target: &SymbolId) -> Vec<&'g SymbolId>"
+            .to_string(),
+        params: vec![],
+        return_type: None,
+        visibility: Visibility::Export,
+        body_hash: 0,
+        is_async: false,
+        embedding_id: None,
+    });
+
+    let server = BlastGuardServer::new(graph, project_root.clone(), Config::default());
+
+    let resp = server
+        .search_tool(Parameters(SearchRequest {
+            query: "outline of src/graph/ops.rs".to_string(),
+            scope: None,
+        }))
+        .await
+        .expect("search_tool should return a successful Json response");
+
+    let hits = &resp.0.hits;
+    assert_eq!(hits.len(), 1, "expected exactly one hit, got {hits:?}");
+
+    let line = &hits[0];
+
+    // Path must be relative (no project_root prefix leaked).
+    let root_str = project_root.display().to_string();
+    assert!(
+        !line.contains(&root_str),
+        "absolute project_root leaked into hit line: {line}"
+    );
+    assert!(
+        line.starts_with("src/graph/ops.rs:12"),
+        "hit should start with relative file:line, got: {line}"
+    );
+
+    // Signature noise must be stripped by to_compact_line.
+    assert!(!line.contains("'g"), "lifetime not stripped: {line}");
+    assert!(
+        !line.contains("fn callers"),
+        "fn keyword not stripped: {line}"
+    );
+    assert!(
+        line.contains("callers"),
+        "symbol name should survive: {line}"
+    );
 }
