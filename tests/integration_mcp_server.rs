@@ -102,3 +102,63 @@ async fn search_response_hits_are_compact_and_path_relative() {
         "symbol name should survive: {line}"
     );
 }
+
+#[tokio::test]
+async fn apply_change_tool_returns_status_and_summary() {
+    use blastguard::edit::{ApplyChangeRequest, ApplyStatus, Change};
+    use blastguard::index::indexer::cold_index;
+    use rmcp::handler::server::wrapper::Parameters;
+    use std::fs;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project_root = tmp.path().to_path_buf();
+
+    // Minimal TypeScript project so cold_index has something to parse.
+    std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&project_root)
+        .status()
+        .expect("git init");
+    fs::create_dir_all(project_root.join("src")).expect("mkdir");
+    let file = project_root.join("src/app.ts");
+    fs::write(
+        &file,
+        "export function greet(name: string): string {\n    return `hi ${name}`;\n}\n",
+    )
+    .expect("write");
+
+    let graph = cold_index(&project_root).expect("cold_index");
+    let server = BlastGuardServer::new(graph, project_root.clone(), Config::default());
+
+    // In-place text replacement that preserves the signature — should land as APPLIED.
+    let resp = server
+        .apply_change_tool(Parameters(ApplyChangeRequest {
+            file: file.clone(),
+            changes: vec![Change {
+                old_text: "hi ${name}".to_string(),
+                new_text: "hello ${name}".to_string(),
+            }],
+            create_file: false,
+            delete_file: false,
+        }))
+        .await
+        .expect("apply_change_tool should return Ok");
+
+    let body = resp.0;
+    assert_eq!(body.status, ApplyStatus::Applied);
+    assert!(
+        body.summary.contains("app.ts"),
+        "summary should mention the filename, got: {}",
+        body.summary
+    );
+    // File on disk should reflect the edit.
+    let new_content = fs::read_to_string(&file).expect("read modified file");
+    assert!(
+        new_content.contains("hello ${name}"),
+        "file not updated on disk, got: {new_content}"
+    );
+    assert!(
+        !new_content.contains("hi ${name}"),
+        "old text still in file, got: {new_content}"
+    );
+}
