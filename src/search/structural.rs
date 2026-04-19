@@ -68,15 +68,44 @@ pub fn callers_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchH
     };
     let mut caller_ids: Vec<&SymbolId> = callers(graph, target_id);
     sort_by_centrality(graph, &mut caller_ids);
-    let hits: Vec<SearchHit> = caller_ids
+    let mut hits: Vec<SearchHit> = caller_ids
         .into_iter()
         .take(max_hits)
         .filter_map(|id| graph.symbols.get(id))
         .map(SearchHit::structural)
         .collect();
+
+    // Cross-file importer hint (Phase-1.5): even though Phase 1 doesn't
+    // resolve which *function* across files calls `name`, we DO know which
+    // files import the file containing `name` (from the Phase-1.3 resolver).
+    // Appending those as "importer" hits gives the model targeted files to
+    // grep instead of re-querying BlastGuard repeatedly for data the Phase-1
+    // graph can't produce.
+    let target_file = &target_id.file;
+    let importer_hits = importers_of(graph, target_file);
+    let mut seen_importers: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
+    for hit in &importer_hits {
+        if hit.file == *target_file {
+            continue; // self-import impossible in practice; defensive
+        }
+        if !seen_importers.insert(hit.file.clone()) {
+            continue; // one hint per importer file, not per import statement
+        }
+        hits.push(SearchHit {
+            file: hit.file.clone(),
+            line: hit.line,
+            signature: Some(format!(
+                "cross-file importer — file imports `{}`; grep `{name}` here for call sites",
+                target_file.display()
+            )),
+            snippet: None,
+        });
+    }
+
     if hits.is_empty() {
         return vec![SearchHit::empty_hint(
-            "no same-file callers in Phase 1 graph; for cross-file callers, use grep",
+            "no same-file callers and no cross-file importers in Phase 1 graph; use grep",
         )];
     }
     hits
@@ -723,6 +752,73 @@ mod tests {
         let hint = hits[0].signature.as_deref().expect("hint signature");
         assert!(hint.contains("cross-file"));
         assert!(hint.contains("grep"));
+    }
+
+    #[test]
+    fn callers_of_appends_cross_file_importer_hints() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind, SymbolKind};
+        // Target `foo` in target.rs. No intra-file callers. Two other files
+        // import target.rs. callers_of should return hints for both
+        // importers instead of a bare "no callers" message.
+        let mut g = CodeGraph::new();
+        let target_file = PathBuf::from("src/target.rs");
+        let importer_a = PathBuf::from("src/a.rs");
+        let importer_b = PathBuf::from("src/b.rs");
+
+        g.insert_symbol(sym("foo", "src/target.rs"));
+        // Module-symbol stubs so importers_of can attach edges to them.
+        for file in [&target_file, &importer_a, &importer_b] {
+            let id = SymbolId {
+                file: file.clone(),
+                name: file
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("mod")
+                    .to_string(),
+                kind: SymbolKind::Module,
+            };
+            let mut s = sym(&id.name, &id.file.to_string_lossy());
+            s.id = id;
+            g.insert_symbol(s);
+        }
+        // a.rs and b.rs both import target.rs.
+        for importer in [&importer_a, &importer_b] {
+            g.insert_edge(Edge {
+                from: SymbolId {
+                    file: importer.clone(),
+                    name: importer.file_stem().unwrap().to_string_lossy().into_owned(),
+                    kind: SymbolKind::Module,
+                },
+                to: SymbolId {
+                    file: target_file.clone(),
+                    name: "target".to_string(),
+                    kind: SymbolKind::Module,
+                },
+                kind: EdgeKind::Imports,
+                line: 1,
+                confidence: Confidence::Certain,
+            });
+        }
+
+        let hits = callers_of(&g, "foo", 10);
+        // No intra-file callers; the two importers should surface as hints.
+        assert_eq!(
+            hits.len(),
+            2,
+            "expected two cross-file importer hints, got {:?}",
+            hits.iter().map(|h| &h.file).collect::<Vec<_>>()
+        );
+        let importer_files: std::collections::HashSet<_> = hits.iter().map(|h| &h.file).collect();
+        assert!(importer_files.contains(&importer_a));
+        assert!(importer_files.contains(&importer_b));
+        for hit in &hits {
+            let sig = hit.signature.as_deref().unwrap_or("");
+            assert!(
+                sig.contains("cross-file importer"),
+                "importer hint signature wrong: {sig}"
+            );
+            assert!(sig.contains("foo"), "hint should name symbol `foo`: {sig}");
+        }
     }
 
     #[test]
