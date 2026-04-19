@@ -315,6 +315,7 @@ BLASTGUARD_TOOLS = [
 class RunResult:
     task_id: str
     arm: str
+    seed: int
     turns: int
     input_tokens: int
     cached_input_tokens: int
@@ -367,9 +368,13 @@ def run_task(
     project_root: str,
     blastguard_binary: str,
     max_turns: int = 25,
-    in_price: float = 0.30,
+    in_price: float = 0.30,  # USD per M input tokens; set to 0.0 for local models
     out_price: float = 1.20,
     apply_bias: bool = True,
+    api_base: str = "https://openrouter.ai/api/v1",
+    api_key_env: str = "OPENROUTER_API_KEY",
+    model_id_for_api: str | None = None,  # if set, use this in the request instead of `model`
+    seed_value: int = 1,  # reproducibility marker in the output record
 ) -> RunResult:
     from openai import OpenAI  # noqa: PLC0415
 
@@ -378,8 +383,8 @@ def run_task(
         tools += BLASTGUARD_TOOLS
 
     client = OpenAI(
-        api_key=os.environ["OPENROUTER_API_KEY"],
-        base_url="https://openrouter.ai/api/v1",
+        api_key=os.environ.get(api_key_env, "not-needed-for-local"),
+        base_url=api_base,
     )
 
     system_prompt = (
@@ -406,7 +411,7 @@ def run_task(
 
     for turn in range(max_turns):  # noqa: B007 — used for turn-count in result
         resp = client.chat.completions.create(
-            model=model,
+            model=model_id_for_api if model_id_for_api is not None else model,
             messages=messages,
             tools=tools,
             max_tokens=4096,
@@ -474,6 +479,7 @@ def run_task(
     return RunResult(
         task_id=task["id"],
         arm=arm,
+        seed=seed_value,
         turns=turn + 1,
         input_tokens=total_in,
         cached_input_tokens=total_cached,
@@ -502,34 +508,68 @@ def main() -> int:
     )
     p.add_argument("--max-turns", type=int, default=25)
     p.add_argument("--output", type=Path, default=Path(__file__).parent / "results" / "microbench.jsonl")
+    p.add_argument("--in-price", type=float, default=0.30, dest="in_price")
+    p.add_argument("--out-price", type=float, default=1.20, dest="out_price")
+    p.add_argument("--cache-price", type=float, default=0.0, dest="cache_price")
+    p.add_argument(
+        "--api-base",
+        default="https://openrouter.ai/api/v1",
+        help="OpenAI-compatible API base URL (set to http://127.0.0.1:8080/v1 for local Gemma)",
+    )
+    p.add_argument(
+        "--api-key-env",
+        default="OPENROUTER_API_KEY",
+        help="Env var name to read the API key from. Local servers usually accept any value; still required to be set.",
+    )
+    p.add_argument(
+        "--seeds",
+        type=int,
+        default=1,
+        help="Run each (task, arm) pair this many times with seeds 1..N. "
+             "Extra seeds give us variance estimates for stats_aggregate.py.",
+    )
+    p.add_argument(
+        "--model-id-override",
+        default=None,
+        help="Override the model ID sent in the chat/completions request while keeping "
+             "the --model value in the output log. Use when the local endpoint expects "
+             "a short ID (e.g. 'gemma-4') but you want the log tagged with the full name.",
+    )
     args = p.parse_args()
 
-    if "OPENROUTER_API_KEY" not in os.environ:
-        print("ERROR: OPENROUTER_API_KEY not set", file=sys.stderr)
+    if args.api_key_env not in os.environ:
+        print(f"ERROR: {args.api_key_env} not set", file=sys.stderr)
         return 2
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     results: list[RunResult] = []
 
-    for task in TASKS:
-        for arm in ("raw", "blastguard"):
-            print(f"\n=== task={task['id']} arm={arm} ===")
-            r = run_task(
-                task=task,
-                arm=arm,
-                model=args.model,
-                project_root=args.project_root,
-                blastguard_binary=args.blastguard_binary,
-                max_turns=args.max_turns,
-            )
-            print(
-                f"  turns={r.turns} in={r.input_tokens} out={r.output_tokens} "
-                f"cost=${r.total_cost_usd:.4f} wall={r.wall_seconds:.1f}s "
-                f"stop={r.stopped_reason}"
-            )
-            print(f"  tools: {r.tool_calls}")
-            print(f"  answer (first 200 chars): {r.final_answer[:200]!r}")
-            results.append(r)
+    for seed_idx in range(1, args.seeds + 1):
+        for task in TASKS:
+            for arm in ("raw", "blastguard"):
+                print(f"\n=== task={task['id']} arm={arm} seed={seed_idx} ===")
+                r = run_task(
+                    task=task,
+                    arm=arm,
+                    model=args.model,
+                    project_root=args.project_root,
+                    blastguard_binary=args.blastguard_binary,
+                    max_turns=args.max_turns,
+                    in_price=args.in_price,
+                    out_price=args.out_price,
+                    api_base=args.api_base,
+                    api_key_env=args.api_key_env,
+                    model_id_for_api=args.model_id_override,
+                    seed_value=seed_idx,
+                )
+                print(
+                    f"  seed={seed_idx} turns={r.turns} in={r.input_tokens} "
+                    f"out={r.output_tokens} cost=${r.total_cost_usd:.4f} wall={r.wall_seconds:.1f}s "
+                    f"stop={r.stopped_reason}"
+                )
+                print(f"  tools: {r.tool_calls}")
+                print(f"  answer (first 200 chars): {r.final_answer[:200]!r}")
+                results.append(r)
 
     with args.output.open("w", encoding="utf-8") as f:
         for r in results:
