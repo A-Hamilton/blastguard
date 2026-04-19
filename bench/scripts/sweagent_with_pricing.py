@@ -14,8 +14,6 @@ interpreter as sweagent, so the registration persists for the whole run.
 
 from __future__ import annotations
 
-import sys
-
 # Per-token USD pricing. Keep in sync with
 # bench/sweagent_runner.py::MODEL_PRICING_USD_PER_TOKEN.
 PRICING = {

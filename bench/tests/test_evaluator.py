@@ -1,10 +1,10 @@
+import json
+from pathlib import Path
+
 from bench.evaluator import (
-    EvaluatorResult,
     parse_evaluator_output,
     write_patches_json,
 )
-from pathlib import Path
-import json
 
 
 def test_parse_evaluator_output_resolved(tmp_path: Path):

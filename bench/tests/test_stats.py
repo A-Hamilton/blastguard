@@ -1,4 +1,4 @@
-from bench.stats import mcnemar_paired, PairedResult
+from bench.stats import mcnemar_paired
 
 
 def test_mcnemar_detects_positive_lift():

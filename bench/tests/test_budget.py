@@ -1,5 +1,6 @@
-from bench.budget import Budget, BudgetExceeded
 import pytest
+
+from bench.budget import Budget, BudgetExceeded
 
 
 def test_budget_records_costs():

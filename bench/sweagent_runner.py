@@ -115,7 +115,7 @@ def _build_config_yaml(
     model: str,
     api_key_env: str = "OPENROUTER_API_KEY",
     api_base: str = "https://openrouter.ai/api/v1",
-    per_instance_cost_limit: float = 5.0,
+    per_instance_cost_limit: float = 0.50,
     output_dir: Path,
 ) -> Path:
     """Write a per-invocation SWE-agent config YAML and return its path.

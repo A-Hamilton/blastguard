@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bench.compare import pair_results, format_report
+from bench.compare import format_report, pair_results
 from bench.evaluator import EvaluatorResult
 
 

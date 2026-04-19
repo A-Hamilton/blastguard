@@ -130,7 +130,11 @@ mod tests {
             embedding_id: None,
         });
         let hits = dispatch(&g, &project_root, "outline of src/foo.rs");
-        assert_eq!(hits.len(), 1, "relative path should resolve against project_root");
+        assert_eq!(
+            hits.len(),
+            1,
+            "relative path should resolve against project_root"
+        );
         assert_eq!(hits[0].signature.as_deref(), Some("fn do_thing()"));
     }
 

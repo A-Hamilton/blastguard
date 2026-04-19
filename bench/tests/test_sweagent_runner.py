@@ -43,7 +43,7 @@ def _fake_sweagent_source(instance_id: str, output: dict) -> str:
         "inst_dir.mkdir(parents=True, exist_ok=True)\n"
         f"traj = {json.dumps({'trajectory': [], 'info': output})!r}\n"
         "(inst_dir / (iid + '.traj')).write_text(traj)\n"
-        f"pred = {json.dumps({'instance_id': instance_id, 'model_name_or_path': 'fake', 'model_patch': output.get('submission', '')})!r}\n"
+        f"pred = {json.dumps({'instance_id': instance_id, 'model_name_or_path': 'fake', 'model_patch': output.get('submission', '')})!r}\n"  # noqa: E501
         "(inst_dir / (iid + '.pred')).write_text(pred)\n"
         "sys.exit(0)\n"
     )

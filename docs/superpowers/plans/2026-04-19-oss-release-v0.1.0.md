@@ -245,11 +245,11 @@ git commit -m "docs: add ROADMAP with Phase 2 + benchmark status"
 **Files:**
 - Modify: `bench/README.md`
 
-- [ ] **Step 1: Find the workflow section**
+- [x] **Step 1: Find the workflow section**
 
 Run: `grep -n '## Workflow\|## Setup' bench/README.md | head`
 
-- [ ] **Step 2: Prepend a "Current state" section before "Workflow"**
+- [x] **Step 2: Prepend a "Current state" section before "Workflow"**
 
 Use `Edit` to insert, immediately after the file's top-level description and before the first `## Workflow` heading:
 
@@ -281,7 +281,7 @@ image-retagging preflight we write, or a pivot to SWE-bench Verified
 (which ships `image_name` natively and doesn't hit the truncation path).
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add bench/README.md
@@ -295,11 +295,11 @@ git commit -m "docs(bench): current-state section — infrastructure built, run 
 **Files:**
 - Modify: `bench/KNOWN_GAPS.md`
 
-- [ ] **Step 1: Read current content**
+- [x] **Step 1: Read current content**
 
 Run: `cat bench/KNOWN_GAPS.md`
 
-- [ ] **Step 2: Append a new "Gap 5" section**
+- [x] **Step 2: Append a new "Gap 5" section**
 
 Use `Edit` to append (don't replace existing content — the prior gaps are historically useful):
 
@@ -339,7 +339,7 @@ images on DockerHub and Dockerfiles in repo").
 Option 3 is the cheapest path to a first BlastGuard lift number.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add bench/KNOWN_GAPS.md

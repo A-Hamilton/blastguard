@@ -1,5 +1,6 @@
-from bench.telemetry import TelemetryRecord, write_jsonl
 from pathlib import Path
+
+from bench.telemetry import TelemetryRecord, write_jsonl
 
 
 def test_telemetry_record_roundtrip(tmp_path: Path):

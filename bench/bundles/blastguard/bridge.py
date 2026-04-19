@@ -11,6 +11,7 @@ content to stdout, exits 0. On tool error, prints stderr and exits 2.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
@@ -77,10 +78,8 @@ def main(argv: list[str]) -> int:
             "params": {"name": tool_name, "arguments": args},
         })
     finally:
-        try:
+        with contextlib.suppress(Exception):
             proc.stdin.close()  # type: ignore[union-attr]
-        except Exception:  # noqa: BLE001
-            pass
         proc.terminate()
         try:
             proc.wait(timeout=5)
