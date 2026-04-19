@@ -62,6 +62,146 @@ impl SearchHit {
     pub fn is_hint(&self) -> bool {
         self.file.as_os_str().is_empty() && self.line == 0 && self.snippet.is_none()
     }
+
+    /// Render the hit as a single compact line suitable for an MCP tool
+    /// response. Uses `project_root`-relative paths when possible, and
+    /// strips lifetime/generic-bound syntax from the signature — agents
+    /// use this as orientation, not as a copy-paste-ready declaration.
+    ///
+    /// Examples:
+    ///
+    /// - `src/graph/ops.rs:12 callers(graph, target) -> Vec<&SymbolId>`
+    /// - `/other/abs/path.rs:5 bar()`  (path outside `project_root`)
+    /// - `src/a.rs:2 let NEEDLE = 1;`  (no signature — uses snippet)
+    #[must_use]
+    pub fn to_compact_line(&self, project_root: &std::path::Path) -> String {
+        let path = self
+            .file
+            .strip_prefix(project_root)
+            .map_or_else(|_| self.file.display().to_string(), |p| p.display().to_string());
+        let body = match (self.signature.as_deref(), self.snippet.as_deref()) {
+            (Some(sig), _) => compact_signature(sig),
+            (None, Some(snippet)) => snippet.trim().to_string(),
+            (None, None) => String::new(),
+        };
+        if body.is_empty() {
+            format!("{path}:{}", self.line)
+        } else {
+            format!("{path}:{} {body}", self.line)
+        }
+    }
+}
+
+/// Strip Rust-specific noise from a signature line that agents don't need for
+/// orientation: explicit lifetimes (`'a`, `'g`, `'static`), trait bounds inside
+/// generics (`T: Sized`), and the leading `fn ` keyword. Converts the
+/// Rust-idiomatic `): Ret` return-type colon to `) -> Ret` only when the
+/// original had no `->`.
+fn compact_signature(sig: &str) -> String {
+    // Pass 1 — strip lifetimes: scan byte-by-byte, track angle-bracket depth.
+    // Inside `<...>`, any `'ident` (followed by opt `, `) is dropped.
+    // Outside `<...>`, `'ident` is also dropped (e.g. `&'a T` → `&T`).
+    let mut out = String::with_capacity(sig.len());
+    let bytes = sig.as_bytes();
+    let mut depth_angle: i32 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        match c {
+            '<' => {
+                depth_angle += 1;
+                out.push(c);
+                i += 1;
+            }
+            '>' => {
+                depth_angle -= 1;
+                out.push(c);
+                i += 1;
+            }
+            '\'' if is_lifetime_start(bytes, i) => {
+                // Drop the lifetime token itself.
+                i += 1;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+                {
+                    i += 1;
+                }
+                // Inside generics, also swallow a trailing `, ` so we don't
+                // leave orphaned commas like `<, T>`.
+                if depth_angle > 0 && i < bytes.len() && bytes[i] == b',' {
+                    i += 1;
+                    while i < bytes.len() && bytes[i] == b' ' {
+                        i += 1;
+                    }
+                }
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+
+    // Pass 2 — strip `X: Bound` inside `<...>` angle-bracket sections.
+    // We walk character-by-character tracking depth.  When we see `:` at
+    // depth > 0 preceded by an identifier character, we skip until the
+    // next `,` or `>` at the same depth.
+    let mut cleaned = String::with_capacity(out.len());
+    let chars: Vec<char> = out.chars().collect();
+    let mut j = 0;
+    while j < chars.len() {
+        if chars[j] == ':'
+            && j > 0
+            && chars[j - 1].is_ascii_alphanumeric()
+            && inside_generics(&chars, j)
+        {
+            // Skip to the next `,` or `>` at depth 0 relative to where we are.
+            let mut depth = 0i32;
+            while j < chars.len() {
+                match chars[j] {
+                    '<' => depth += 1,
+                    '>' | ',' if depth == 0 => break,
+                    '>' => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            continue;
+        }
+        cleaned.push(chars[j]);
+        j += 1;
+    }
+
+    // Pass 3 — drop the leading `fn ` keyword when present.
+    let trimmed = cleaned.strip_prefix("fn ").unwrap_or(&cleaned);
+
+    // Pass 4 — convert `): T` return-type style to `) -> T` when no `->`.
+    if !trimmed.contains("->") {
+        if let Some(idx) = trimmed.rfind("):") {
+            let (head, tail) = trimmed.split_at(idx + 1);
+            return format!("{head} ->{}", &tail[1..]);
+        }
+    }
+    trimmed.to_string()
+}
+
+/// `'` starts a lifetime when it is followed immediately by an ASCII letter or `_`.
+/// We assume signatures don't contain string/char literals.
+fn is_lifetime_start(bytes: &[u8], i: usize) -> bool {
+    i + 1 < bytes.len() && (bytes[i + 1].is_ascii_alphabetic() || bytes[i + 1] == b'_')
+}
+
+/// Returns `true` when `pos` is inside at least one unclosed `<` in `chars`.
+fn inside_generics(chars: &[char], pos: usize) -> bool {
+    let mut depth = 0i32;
+    for &c in &chars[..pos] {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth > 0
 }
 
 /// Sort a slice of [`SymbolId`] references by reverse-edge centrality descending.
@@ -70,6 +210,66 @@ impl SearchHit {
 /// highest-dependent symbols come first.
 pub fn sort_by_centrality(graph: &CodeGraph, ids: &mut [&SymbolId]) {
     ids.sort_by_key(|id| Reverse(graph.centrality.get(*id).copied().unwrap_or(0)));
+}
+
+#[cfg(test)]
+mod tests_compact {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn compact_line_uses_relative_path_when_under_project_root() {
+        let hit = SearchHit {
+            file: PathBuf::from("/proj/root/src/graph/ops.rs"),
+            line: 12,
+            signature: Some(
+                "callers(graph: &'g CodeGraph, target: &SymbolId): Vec<&'g SymbolId>".to_string(),
+            ),
+            snippet: None,
+        };
+        let line = hit.to_compact_line(&PathBuf::from("/proj/root"));
+        assert!(line.starts_with("src/graph/ops.rs:12"), "got: {line}");
+        assert!(!line.contains("/proj/root"), "absolute path leaked: {line}");
+        assert!(line.contains("callers"), "signature name should survive: {line}");
+    }
+
+    #[test]
+    fn compact_line_strips_lifetimes_and_trailing_generics() {
+        let hit = SearchHit {
+            file: PathBuf::from("/p/src/a.rs"),
+            line: 1,
+            signature: Some("fn foo<'a, T: Sized>(x: &'a T) -> Vec<&'a T>".to_string()),
+            snippet: None,
+        };
+        let line = hit.to_compact_line(&PathBuf::from("/p"));
+        assert!(!line.contains("'a"), "lifetime not stripped: {line}");
+        assert!(!line.contains("T: Sized"), "generic bound not stripped: {line}");
+        assert!(line.contains("foo"));
+    }
+
+    #[test]
+    fn compact_line_preserves_absolute_path_when_outside_project_root() {
+        let hit = SearchHit {
+            file: PathBuf::from("/other/abs/path.rs"),
+            line: 5,
+            signature: Some("fn bar()".to_string()),
+            snippet: None,
+        };
+        let line = hit.to_compact_line(&PathBuf::from("/proj/root"));
+        assert!(line.starts_with("/other/abs/path.rs:5"), "got: {line}");
+    }
+
+    #[test]
+    fn compact_line_falls_back_to_snippet_when_no_signature() {
+        let hit = SearchHit {
+            file: PathBuf::from("/p/a.rs"),
+            line: 2,
+            signature: None,
+            snippet: Some("let NEEDLE = 1;".to_string()),
+        };
+        let line = hit.to_compact_line(&PathBuf::from("/p"));
+        assert!(line.contains("NEEDLE"), "got: {line}");
+    }
 }
 
 #[cfg(test)]
