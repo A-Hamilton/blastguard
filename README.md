@@ -78,8 +78,12 @@ attribution after a batch of edits.
 
 ## Honest positioning
 
-This is a Phase 1 MVP. **Measured SWE-bench Pro lift has not been published yet.**
-The harness lives in `bench/`; see `bench/README.md` for the run command.
+This is a Phase 1 MVP. **BlastGuard's own SWE-bench lift has not been measured
+yet** — the harness (`bench/`) is built and live-verified on synthetic tasks,
+but a full benchmark run is currently blocked by an upstream bug in SWE-agent's
+Docker deployment when consuming SWE-bench Pro images (tag-length truncation).
+See `docs/BENCHMARKING.md` for the setup and `bench/KNOWN_GAPS.md` for the
+blocker.
 
 Projected lift is `+1 to +3 points` on SWE-bench Pro with a realistic confidence
 interval of `-1 to +5` — grounded in peer-reviewed adjacent research:
@@ -98,6 +102,19 @@ natively; the lift there may be smaller.
 Benchmark integrity matters. The grader in `bench/grader.py` defends against the
 UC Berkeley "BenchJack" `conftest.py` exploit (any change to `conftest.py`,
 `pytest.ini`, `tox.ini`, or CI workflows counts as unresolved tampering).
+
+### What's verified today (not projected)
+
+- Rust codebase: 253 library tests pass, clippy pedantic clean, `cargo fmt` clean.
+- MCP handshake + all three tools live-tested against the release binary.
+- `search` structural queries (outline / callers / find / exports / libraries)
+  return correct results on this repo.
+- `apply_change` error propagation and `run_tests` cargo auto-detect verified.
+- SWE-agent integration: agent invokes BlastGuard tools via the bundle over
+  real MCP (4 tool calls on synthetic task, exit_status=submitted, $0.01 spend).
+
+What's pending: the lift number on SWE-bench Pro. Waiting on upstream
+SWE-agent fixes or community contribution.
 
 ## Known limitations (Phase 1)
 
