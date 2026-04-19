@@ -59,13 +59,20 @@ def parse_evaluator_output(out_dir: Path) -> list[EvaluatorResult]:
 
         task_id = str(payload.get("instance_id", path.stem))
         has_error = bool(payload.get("error")) or "resolved" not in payload
-        resolved = bool(payload.get("resolved", False)) if not has_error else False
+        # Flag empty_patch only when the key is present but the value is empty.
+        # Evaluator output often omits model_patch entirely; absence is not an error.
+        raw_patch = payload.get("model_patch")
+        empty_patch = raw_patch is not None and not str(raw_patch).strip()
+        infra_failure = has_error or empty_patch
+        resolved = bool(payload.get("resolved", False)) if not infra_failure else False
+        if empty_patch and not has_error:
+            payload = {**payload, "error": "empty_patch (upstream generation failure)"}
 
         results.append(
             EvaluatorResult(
                 task_id=task_id,
                 resolved=resolved,
-                infra_failure=has_error,
+                infra_failure=infra_failure,
                 raw=payload,
             )
         )

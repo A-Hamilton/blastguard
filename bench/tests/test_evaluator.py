@@ -42,6 +42,24 @@ def test_parse_evaluator_output_infra_failure(tmp_path: Path):
     assert r.infra_failure is True
 
 
+def test_parse_evaluator_output_flags_empty_patch(tmp_path: Path):
+    """An evaluator entry with empty model_patch (upstream timeout) is infra_failure."""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "django__999.json").write_text(
+        json.dumps({
+            "instance_id": "django__999",
+            "resolved": False,
+            "model_patch": "",
+        })
+    )
+    results = parse_evaluator_output(out_dir)
+    r = results[0]
+    assert r.resolved is False
+    assert r.infra_failure is True
+    assert "empty_patch" in (r.raw.get("error") or "")
+
+
 def test_write_patches_json_matches_evaluator_format(tmp_path: Path):
     """The evaluator expects a JSON array of {instance_id, patch, prefix}."""
     out = tmp_path / "patches.json"
