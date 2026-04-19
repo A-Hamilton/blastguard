@@ -1254,92 +1254,56 @@ git commit -m "bench: one-shot retry on rate-limit exits from sweagent"
 
 This is a harness-wiring smoke, not a paid run. We use `--dry-run` by mocking `SWEAGENT_BINARY` to a script that emits canned trajectories. No API keys, no Docker pulls, no spend.
 
-- [ ] **Step 1: Write a local-mock SWE-agent script**
+- [x] **Step 1: Write a local-mock SWE-agent script**
 
-```bash
-cat > /tmp/mock_sweagent.py << 'PYEOF'
-import json, os, sys, pathlib
-out = pathlib.Path([a for a in sys.argv if a.startswith('--output_dir=') or False] or ['--output_dir='])[-1]
-# Simpler: find --output_dir N argv pair
-args = sys.argv[1:]
-out_dir = None
-for i, a in enumerate(args):
-    if a == "--output_dir" and i + 1 < len(args):
-        out_dir = pathlib.Path(args[i + 1])
-if out_dir is None:
-    sys.stderr.write("no --output_dir in argv\n"); sys.exit(2)
-out_dir.mkdir(parents=True, exist_ok=True)
-iid = "unknown"
-for i, a in enumerate(args):
-    if a == "--instance.instance_id" and i + 1 < len(args):
-        iid = args[i + 1]
-(out_dir / "trajectory.json").write_text(json.dumps({
-    "instance_id": iid,
-    "model_stats": {"prompt_tokens": 50000, "completion_tokens": 5000, "n_turns": 12},
-    "model_patch": f"diff --git a/readme b/readme\n+ {iid}\n",
-}))
-sys.exit(0)
-PYEOF
-```
+Two mock scripts written to `/tmp/bench_mocks/` (ephemeral; removed after run):
+- `mock_sweagent.py`: derives instance_id from `output_dir` basename (runner sets it to task_id); writes real-format `<iid>.traj` (info.model_stats.tokens_sent/received/api_calls + info.exit_status="submitted") and `<iid>.pred` (instance_id, model_name_or_path, model_patch).
+- `git` (bash): no-ops `clone` (mkdir target, exit 0) and `-C <path> checkout` (exit 0); all other git subcommands fall through to the real git. This avoids real network calls in `_ensure_workspace`.
 
-- [ ] **Step 2: Run raw arm against 3 tasks via mock**
+- [x] **Step 2: Run raw arm against 3 tasks via mock**
 
 ```bash
 cd /home/adam/Documents/blastguard && \
-  export SWEAGENT_BINARY="$(bench/.venv/bin/python -c 'import sys;print(sys.executable)') /tmp/mock_sweagent.py" && \
+  export PATH="/tmp/bench_mocks:$PATH" && \
+  export SWEAGENT_BINARY="/home/adam/Documents/blastguard/bench/.venv/bin/python /tmp/bench_mocks/mock_sweagent.py" && \
   HF_HOME=/tmp/hf bench/.venv/bin/python -m bench.runner \
     --arm raw --limit 3 --seed 42 \
     --budget-usd 1.00 --run-id mock-raw \
-    --model minimax/minimax-m2.7
+    --model openrouter/minimax/minimax-m2.7
 ```
 
-Expected: completes instantly, `bench/results/mock-raw/patches.json` has 3 entries, telemetry shows 50k/5k tokens per task, spend ~$0.06.
+Completed instantly, 3 predictions, $0.0630 mock spend.
 
-- [ ] **Step 3: Run blastguard arm against the same 3 tasks**
+- [x] **Step 3: Run blastguard arm against the same 3 tasks**
 
 ```bash
 cd /home/adam/Documents/blastguard && \
-  export SWEAGENT_BINARY="$(bench/.venv/bin/python -c 'import sys;print(sys.executable)') /tmp/mock_sweagent.py" && \
+  export PATH="/tmp/bench_mocks:$PATH" && \
+  export SWEAGENT_BINARY="/home/adam/Documents/blastguard/bench/.venv/bin/python /tmp/bench_mocks/mock_sweagent.py" && \
   HF_HOME=/tmp/hf bench/.venv/bin/python -m bench.runner \
     --arm blastguard --limit 3 --seed 42 \
     --budget-usd 1.00 --run-id mock-bg \
-    --model minimax/minimax-m2.7
+    --model openrouter/minimax/minimax-m2.7 \
+    --blastguard-binary /nonexistent/blastguard
 ```
 
-Expected: same shape, 3 entries.
+Completed instantly, 3 predictions, $0.0630 mock spend.
 
-- [ ] **Step 4: Exercise compare.py on the mock outputs**
+- [x] **Step 4: Exercise compare.py on the mock outputs**
 
-The mock emits trajectories, not evaluator output JSON. Skip the evaluator for this smoke — we'll test `compare.py` separately with synthesized evaluator JSON in the existing tests. For this task, just verify both `patches.json` files are well-formed:
+Verified both `patches.json` files have 3 entries each. Telemetry JSONL verified well-formed (task_id, arm, token counts, cost_usd in every row). Trajectory files confirmed at `trajectories/<tid>/<tid>/<tid>.traj` and `.pred`.
 
-```bash
-cd /home/adam/Documents/blastguard && \
-  bench/.venv/bin/python -c "
-import json, pathlib
-for run in ('mock-raw', 'mock-bg'):
-    p = json.loads((pathlib.Path('bench/results') / run / 'patches.json').read_text())
-    print(run, 'tasks:', [e['instance_id'] for e in p])
-    assert len(p) == 3, f'{run} has {len(p)} entries, expected 3'
-"
-```
-
-Expected: prints both runs with 3 task IDs each. No assertion errors.
-
-- [ ] **Step 5: Decision gate**
+- [x] **Step 5: Decision gate**
 
 Before any paid invocation:
-- [ ] Both arms produced 3 patches via the mock
-- [ ] Telemetry JSONL is well-formed (every row has `task_id`, `arm`, token counts, `cost_usd`)
-- [ ] `bench/results/mock-*/trajectories/<tid>/trajectory.json` exists per task
-- [ ] No unexpected files under `bench/results/` (check gitignore covers this)
+- [x] Both arms produced 3 patches via the mock
+- [x] Telemetry JSONL is well-formed (every row has `task_id`, `arm`, token counts, `cost_usd`)
+- [x] `bench/results/mock-*/trajectories/<tid>/<tid>/<tid>.traj` and `.pred` exist per task
+- [x] No unexpected files under `bench/results/` (smoke-dry from Task 5 plus mock dirs, all cleaned up)
 
-If any fails, STOP and fix before proceeding to real runs.
+- [x] **Step 6: Clean up mock outputs**
 
-- [ ] **Step 6: Clean up mock outputs**
-
-```bash
-rm -rf /home/adam/Documents/blastguard/bench/results/mock-raw /home/adam/Documents/blastguard/bench/results/mock-bg /tmp/mock_sweagent.py
-```
+Removed `/tmp/bench_mocks/`, `bench/results/mock-raw/`, `bench/results/mock-bg/` via Python shutil.
 
 ---
 
