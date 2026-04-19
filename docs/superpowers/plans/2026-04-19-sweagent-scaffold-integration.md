@@ -578,7 +578,7 @@ git commit -m "bench: BlastGuard bundle (config.yaml + 3 shell wrappers)"
 
 This module owns the subprocess boundary. It exposes `run_arm(arm, task, model, seed, workspace, budget, telemetry_path)` — which assembles the SWE-agent CLI invocation, sets the BG env vars on arm=blastguard, parses the trajectory JSON for token/turn counts, returns a patch string.
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Create `bench/tests/test_sweagent_runner.py`:
 
@@ -672,14 +672,14 @@ def test_run_arm_blastguard_sets_env_vars(fake_sweagent, tmp_path, monkeypatch):
     assert "blastguard" in joined
 ```
 
-- [ ] **Step 2: Confirm failure**
+- [x] **Step 2: Confirm failure**
 
 ```bash
 cd /home/adam/Documents/blastguard/bench && uv run pytest tests/test_sweagent_runner.py -v
 ```
 Expected: ModuleNotFoundError.
 
-- [ ] **Step 3: Implement `bench/sweagent_runner.py`**
+- [x] **Step 3: Implement `bench/sweagent_runner.py`**
 
 ```python
 """Orchestrate SWE-agent subprocess invocations per task per arm.
@@ -797,7 +797,7 @@ def run_arm(
     return ArmResult(patch=patch, tokens=tokens, trajectory_path=traj_path)
 ```
 
-- [ ] **Step 3a: Extract TokenCount into its own module**
+- [x] **Step 3a: Extract TokenCount into its own module**
 
 Create `bench/token_count.py` (this exists today inside `bench/agent_loop.py`; we're moving it):
 
@@ -819,14 +819,14 @@ class TokenCount:
     turns: int
 ```
 
-- [ ] **Step 4: Confirm tests pass**
+- [x] **Step 4: Confirm tests pass**
 
 ```bash
 cd /home/adam/Documents/blastguard/bench && uv run pytest tests/test_sweagent_runner.py -v
 ```
 Expected: 2 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bench/sweagent_runner.py bench/token_count.py bench/tests/test_sweagent_runner.py
