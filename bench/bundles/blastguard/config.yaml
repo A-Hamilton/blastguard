@@ -1,0 +1,48 @@
+# SWE-agent v1 bundle declaring the three BlastGuard MCP tools.
+# Referenced from a run config's `agent.tools.bundles` list (path-based).
+# Shape matches tools/edit_anthropic/config.yaml in the SWE-agent repo.
+
+tools:
+  blastguard_search:
+    signature: |
+      blastguard_search <json_query>
+    docstring: >
+      Query BlastGuard's AST code graph. json_query is a single-quoted JSON
+      string like '{"query": "callers of FOO"}' or '{"query": "tests for FILE"}'.
+      Returns structured graph results in 50-300 tokens vs. 10k+ from grep.
+      Strongly prefer this over bash grep when searching for symbol
+      relationships (callers, callees, imports, tests, outline).
+    arguments:
+      - name: json_query
+        type: string
+        description: "JSON payload. Keys: 'query' (the natural-language query)."
+        required: true
+
+  blastguard_apply_change:
+    signature: |
+      blastguard_apply_change <json_changes>
+    docstring: >
+      Apply edits to a file with cascade-warning analysis. json_changes is a
+      JSON string like '{"file": "path", "changes": [{"old_text": "...",
+      "new_text": "..."}]}'. Returns SIGNATURE / ASYNC_CHANGE / ORPHAN /
+      INTERFACE_BREAK warnings plus callers + tests context. Writes
+      immediately. Prefer this over str_replace_editor for source-code edits.
+    arguments:
+      - name: json_changes
+        type: string
+        description: "JSON payload. Keys: 'file' (path), 'changes' (list of {old_text, new_text})."
+        required: true
+
+  blastguard_run_tests:
+    signature: |
+      blastguard_run_tests <json_opts>
+    docstring: >
+      Run the project's test suite (auto-detects pytest/jest/cargo).
+      json_opts is a JSON string like '{"path": "optional/subpath"}'.
+      Failures carry "YOU MODIFIED X (N edits ago)" annotations -- use this to
+      attribute a regression to your own recent edit.
+    arguments:
+      - name: json_opts
+        type: string
+        description: "JSON payload. Keys: 'path' (optional subpath to scope tests to)."
+        required: false

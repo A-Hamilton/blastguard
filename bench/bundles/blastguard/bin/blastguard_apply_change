@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Usage: blastguard_apply_change '<json args>'
+# $BLASTGUARD_BINARY + $BLASTGUARD_PROJECT_ROOT are set by the caller.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+exec python "$HERE/../bridge.py" apply_change "${1:-{\}}"

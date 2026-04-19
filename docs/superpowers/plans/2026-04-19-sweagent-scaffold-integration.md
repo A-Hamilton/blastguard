@@ -30,6 +30,74 @@
 
 ---
 
+## Research notes (verified against SWE-agent v1.1.0, 2026-04-19)
+
+**These notes override any code block in Tasks 3-9 that contradicts them.** The original plan was written against assumed flags; Task 1 verified the real interface.
+
+**Install path:** `sweagent @ git+https://github.com/SWE-agent/SWE-agent.git@v1.1.0` (PyPI `sweagent` is a broken v0.0.1 stub). The repo is also cloned to `bench/.sweagent-repo/` for bundled `config/`, `tools/`, `trajectories/` directories that the package expects at runtime.
+
+**CLI surface:**
+- `sweagent run` — one instance. Flags: `--config <yaml>`, `--agent.model.name`, `--agent.model.per_instance_cost_limit`, `--env.repo.path` (local repo path) OR `--env.repo.github_url`, `--problem_statement.path` OR `--problem_statement.github_url`, `--output_dir`. **No `--seed`, `--workspace`, `--tools.bundles`, `--instance.repo` flags exist.** Unknown flags error out (`extra="forbid"`).
+- `sweagent run-batch` — multiple instances. Flags: `--instances.type huggingface --instances.dataset_name ScaleAI/SWE-bench_Pro --instances.split test --instances.filter <regex> --instances.slice :N --num_workers N --output_dir <dir>`. Handles repo checkout + Docker internally.
+
+**Tool bundles:** Added via config YAML `agent.tools.bundles: [{path: tools/foo}, ...]`, NOT via CLI flag. Bundle layout: `<bundle>/bin/<executable>` (no `.sh`), `<bundle>/config.yaml` with `tools:` block (not `commands:`). Bundle config schema:
+```yaml
+tools:
+  my_tool:
+    signature: "my_tool <arg>"
+    docstring: >
+      Description...
+    arguments:
+      - name: arg
+        type: string
+        required: true
+```
+
+**Model config (YAML):**
+```yaml
+agent:
+  model:
+    name: "openrouter/minimax/minimax-m2.7"
+    api_key: "$OPENROUTER_API_KEY"     # $-prefix means env var lookup
+    api_base: "https://openrouter.ai/api/v1"
+    per_instance_cost_limit: 3.0
+    total_cost_limit: 0.0               # aggregate cap; 0 = disabled
+    temperature: 0.0
+    max_input_tokens: 200000            # required if model not in litellm.model_cost
+    max_output_tokens: 8192
+  tools:
+    bundles:
+      - path: tools/registry            # relative to SWE-agent repo root
+      - path: <abs path to blastguard bundle>
+    enable_bash_tool: true
+    parse_function:
+      type: function_calling
+```
+
+**Determinism:** There is no seed flag. Use `temperature: 0.0`. Paired arms against the same filter/slice at temp 0 give ~deterministic task ordering; residual non-determinism is inherent to the model.
+
+**Trajectory output schema:** Per instance SWE-agent writes to `<output_dir>/<instance_id>/`:
+- `<instance_id>.traj` — JSON with `info.submission` (unified diff string, maybe null), `info.model_stats.instance_cost`, `info.model_stats.tokens_sent`, `info.model_stats.tokens_received`, `info.model_stats.api_calls`, `info.exit_status`. **NOT `prompt_tokens` / `completion_tokens` / `n_turns` / `model_patch`.**
+- `<instance_id>.pred` — SWE-bench submission format: `{"instance_id", "model_name_or_path", "model_patch"}`. `model_patch` is null when the agent didn't emit a submission (timeout, cost limit, etc.).
+
+**Parsing telemetry:** read `.traj` for token counts + cost; read `.pred` for the patch. Map to `TokenCount` via:
+```python
+stats = traj["info"].get("model_stats", {})
+tokens = TokenCount(
+    input=int(stats.get("tokens_sent", 0)),
+    cached_input=0,          # not surfaced by SWE-agent; leave 0
+    output=int(stats.get("tokens_received", 0)),
+    turns=int(stats.get("api_calls", 0)),
+)
+patch = pred.get("model_patch") or ""   # coerce null to empty string
+```
+
+**Infra failures:** `.traj` `info.exit_status` values include `"submitted"` (clean), `"exit_cost"`, `"exit_error"`, `"exit_format"`, `"exit_context"`. Task 7's `infra_failure` logic should treat any non-`"submitted"` status + empty-patch pred as infra (not task failure) to avoid contaminating McNemar's.
+
+**OpenRouter routing:** `api_key: "$OPENROUTER_API_KEY"` + `api_base: "https://openrouter.ai/api/v1"`. LiteLLM passes through. Export `OPENROUTER_API_KEY` in shell before running.
+
+---
+
 ## File Structure
 
 **Create:**
@@ -330,7 +398,7 @@ git commit -m "bench: BlastGuard MCP bridge for SWE-agent bash wrappers"
 - Create: `bench/bundles/blastguard/bg_run_tests.sh`
 - Create: `bench/bundles/blastguard/config.yaml`
 
-- [ ] **Step 1: Write the three shell wrappers**
+- [x] **Step 1: Write the three shell wrappers**
 
 Each is a thin exec of bridge.py with the tool name baked in. Arguments are JSON-quoted so SWE-agent can pass arbitrary payloads.
 
@@ -366,50 +434,115 @@ Make them executable:
 chmod +x /home/adam/Documents/blastguard/bench/bundles/blastguard/bg_*.sh
 ```
 
-- [ ] **Step 2: Write the bundle config**
+- [x] **Step 1a: Directory layout per SWE-agent convention**
+
+SWE-agent bundles live in a directory with:
+
+```
+bench/bundles/blastguard/
+├── bin/
+│   ├── blastguard_search
+│   ├── blastguard_apply_change
+│   └── blastguard_run_tests
+├── config.yaml
+└── bridge.py              # already created in Task 2
+```
+
+Executables MUST be under `bin/` with no extension (SWE-agent scans that subdir). Move `bg_search.sh` → `bin/blastguard_search` etc. Update the shell wrappers' `dirname` logic to account for the one-level-deeper path.
+
+- [x] **Step 1b: Rewrite the three executables into `bin/`**
+
+`bench/bundles/blastguard/bin/blastguard_search`:
+
+```bash
+#!/usr/bin/env bash
+# Usage: blastguard_search '<json args>'
+# $BLASTGUARD_BINARY + $BLASTGUARD_PROJECT_ROOT are set by the caller.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+exec python "$HERE/../bridge.py" search "${1:-{\}}"
+```
+
+`bench/bundles/blastguard/bin/blastguard_apply_change`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+exec python "$HERE/../bridge.py" apply_change "${1:-{\}}"
+```
+
+`bench/bundles/blastguard/bin/blastguard_run_tests`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+exec python "$HERE/../bridge.py" run_tests "${1:-{\}}"
+```
+
+Make them executable:
+
+```bash
+chmod +x /home/adam/Documents/blastguard/bench/bundles/blastguard/bin/*
+```
+
+- [x] **Step 2: Write the bundle config (real SWE-agent v1 schema)**
 
 `bench/bundles/blastguard/config.yaml`:
 
 ```yaml
-# SWE-agent bundle declaring the three BlastGuard MCP tools as shell commands.
-# The agent sees these alongside its native tools (bash, str_replace_editor).
-# The BLASTGUARD_BIAS language in the system prompt (bench/prompts.py) tells
-# the agent when to prefer these over native alternatives.
+# SWE-agent v1 bundle declaring the three BlastGuard MCP tools.
+# Referenced from a run config's `agent.tools.bundles` list (path-based).
+# Shape matches tools/edit_anthropic/config.yaml in the SWE-agent repo.
 
-bundle_name: blastguard
-description: BlastGuard AST-graph retrieval and cascade-aware editing tools.
+tools:
+  blastguard_search:
+    signature: |
+      blastguard_search <json_query>
+    docstring: >
+      Query BlastGuard's AST code graph. json_query is a single-quoted JSON
+      string like '{"query": "callers of FOO"}' or '{"query": "tests for FILE"}'.
+      Returns structured graph results in 50-300 tokens vs. 10k+ from grep.
+      Strongly prefer this over bash grep when searching for symbol
+      relationships (callers, callees, imports, tests, outline).
+    arguments:
+      - name: json_query
+        type: string
+        description: "JSON payload. Keys: 'query' (the natural-language query)."
+        required: true
 
-commands:
-  - name: blastguard_search
-    docstring: |
-      Query BlastGuard's code graph. Accepts JSON of the form
-      {"query": "callers of FOO"} or {"query": "tests for FILE"}.
-      Returns structured graph results in 50-300 tokens instead of raw grep.
-    signature: blastguard_search <json_query>
-    execute: ./bg_search.sh "$@"
+  blastguard_apply_change:
+    signature: |
+      blastguard_apply_change <json_changes>
+    docstring: >
+      Apply edits to a file with cascade-warning analysis. json_changes is a
+      JSON string like '{"file": "path", "changes": [{"old_text": "...",
+      "new_text": "..."}]}'. Returns SIGNATURE / ASYNC_CHANGE / ORPHAN /
+      INTERFACE_BREAK warnings plus callers + tests context. Writes
+      immediately. Prefer this over str_replace_editor for source-code edits.
+    arguments:
+      - name: json_changes
+        type: string
+        description: "JSON payload. Keys: 'file' (path), 'changes' (list of {old_text, new_text})."
+        required: true
 
-  - name: blastguard_apply_change
-    docstring: |
-      Apply one or more edits to a file with cascade-warning analysis.
-      Accepts JSON: {"file": "path", "changes": [{"old_text": "...", "new_text": "..."}]}.
-      Returns cascade warnings (SIGNATURE / ASYNC_CHANGE / ORPHAN /
-      INTERFACE_BREAK) plus a bundled context (callers + tests). Writes
-      immediately; no approval gate.
-    signature: blastguard_apply_change <json_changes>
-    execute: ./bg_apply_change.sh "$@"
-
-  - name: blastguard_run_tests
-    docstring: |
+  blastguard_run_tests:
+    signature: |
+      blastguard_run_tests <json_opts>
+    docstring: >
       Run the project's test suite (auto-detects pytest/jest/cargo).
-      Accepts JSON: {"path": "optional/subpath"}. Failures are annotated with
-      "YOU MODIFIED X (N edits ago)" when a stack frame hits a symbol you
-      recently edited — this is how you attribute a new regression to your
-      own edit.
-    signature: blastguard_run_tests <json_opts>
-    execute: ./bg_run_tests.sh "$@"
+      json_opts is a JSON string like '{"path": "optional/subpath"}'.
+      Failures carry "YOU MODIFIED X (N edits ago)" annotations — use this to
+      attribute a regression to your own recent edit.
+    arguments:
+      - name: json_opts
+        type: string
+        description: "JSON payload. Keys: 'path' (optional subpath to scope tests to)."
+        required: false
 ```
 
-- [ ] **Step 3: Smoke-test the wrappers manually**
+- [x] **Step 3: Smoke-test the wrappers manually**
 
 Build the release binary first (if not already built):
 
@@ -428,7 +561,7 @@ bench/.venv/bin/python bench/bundles/blastguard/bridge.py search '{"query":"outl
 
 Expected: a short outline of `src/main.rs` prints to stdout, exit 0. If the binary isn't built or the path is wrong, the error will explain.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add bench/bundles/blastguard/
