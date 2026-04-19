@@ -28,6 +28,32 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export OPENROUTER_API_KEY=sk-or-...   # for GLM-5.1
 ```
 
+## Current state (2026-04-19)
+
+The harness is feature-complete and live-verified on synthetic tasks:
+
+- `bench/tasks.py` loads ScaleAI/SWE-bench_Pro (Python subset, 266
+  instances after filter).
+- `bench/prepare_instances.py` transforms HF rows to SWE-agent's
+  `SimpleBatchInstance` JSONL.
+- `bench/batch_runner.py` invokes `sweagent run-batch` per arm.
+- `bench/bundles/blastguard/` is a working SWE-agent tool bundle.
+- `bench/scripts/sweagent_with_pricing.py` registers manual pricing for
+  LiteLLM-unmapped models before handing off to SWE-agent.
+- `bench/stats.py` + `bench/compare.py` do paired McNemar's analysis.
+- `bench/evaluator.py` wraps `scaleapi/SWE-bench_Pro-os` subprocess,
+  guards against issue #78 silent rate-limit failures.
+
+**End-to-end SWE-bench Pro run is currently blocked upstream.**
+SWE-agent's `swerex` deployment does a secondary `docker build
+--build-arg BASE_IMAGE=<tag>` that truncates image tags past 128
+characters. Most SWE-bench Pro `dockerhub_tag` values exceed this.
+See `KNOWN_GAPS.md`.
+
+Pending unblock: either a SWE-agent upstream patch, a local
+image-retagging preflight we write, or a pivot to SWE-bench Verified
+(which ships `image_name` natively and doesn't hit the truncation path).
+
 ## Workflow (Plan 9 — SWE-agent scaffold)
 
 BlastGuard runs as a SWE-agent bundle. SWE-agent handles workspace
