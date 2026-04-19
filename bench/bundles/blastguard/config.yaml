@@ -1,6 +1,11 @@
 # SWE-agent v1 bundle declaring the three BlastGuard MCP tools.
 # Referenced from a run config's `agent.tools.bundles` list (path-based).
 # Shape matches tools/edit_anthropic/config.yaml in the SWE-agent repo.
+#
+# NOTE: SWE-agent passes docstrings through Python's str.format(). Any literal
+# curly brace must be doubled ({{ }}) to escape the placeholder semantics, or
+# the tool-registration step fails with KeyError. This is why the JSON-example
+# fragments below use {{ and }} instead of { and }.
 
 tools:
   blastguard_search:
@@ -8,14 +13,16 @@ tools:
       blastguard_search <json_query>
     docstring: >
       Query BlastGuard's AST code graph. json_query is a single-quoted JSON
-      string like '{"query": "callers of FOO"}' or '{"query": "tests for FILE"}'.
-      Returns structured graph results in 50-300 tokens vs. 10k+ from grep.
-      Strongly prefer this over bash grep when searching for symbol
-      relationships (callers, callees, imports, tests, outline).
+      string. Verified working queries (Phase 1): '{{"query": "outline of
+      PATH"}}' — every symbol in a file with signatures; '{{"query": "callers
+      of NAME"}}' — same-file callers only; '{{"query": "find NAME"}}' —
+      fuzzy symbol lookup; '{{"query": "exports of PATH"}}' — public symbols.
+      Returns 50-300 tokens vs. 10k+ from grep. Prefer this over bash grep
+      when searching for structural relationships.
     arguments:
       - name: json_query
         type: string
-        description: "JSON payload. Keys: 'query' (the natural-language query)."
+        description: "Single-quoted JSON string with a 'query' key."
         required: true
 
   blastguard_apply_change:
@@ -23,14 +30,15 @@ tools:
       blastguard_apply_change <json_changes>
     docstring: >
       Apply edits to a file with cascade-warning analysis. json_changes is a
-      JSON string like '{"file": "path", "changes": [{"old_text": "...",
-      "new_text": "..."}]}'. Returns SIGNATURE / ASYNC_CHANGE / ORPHAN /
-      INTERFACE_BREAK warnings plus callers + tests context. Writes
-      immediately. Prefer this over str_replace_editor for source-code edits.
+      single-quoted JSON string like '{{"file": "path", "changes": [{{"old_text":
+      "...", "new_text": "..."}}]}}'. Returns SIGNATURE / ASYNC_CHANGE /
+      ORPHAN / INTERFACE_BREAK warnings plus callers + tests context. Writes
+      immediately. Prefer over str_replace_editor for source edits where
+      blast radius is unclear.
     arguments:
       - name: json_changes
         type: string
-        description: "JSON payload. Keys: 'file' (path), 'changes' (list of {old_text, new_text})."
+        description: "Single-quoted JSON with 'file' and 'changes' keys."
         required: true
 
   blastguard_run_tests:
@@ -38,11 +46,12 @@ tools:
       blastguard_run_tests <json_opts>
     docstring: >
       Run the project's test suite (auto-detects pytest/jest/cargo).
-      json_opts is a JSON string like '{"path": "optional/subpath"}'.
-      Failures carry "YOU MODIFIED X (N edits ago)" annotations -- use this to
-      attribute a regression to your own recent edit.
+      json_opts is a single-quoted JSON string like '{{"path":
+      "optional/subpath"}}' or '{{}}' for the default. Failures carry
+      "YOU MODIFIED X (N edits ago)" annotations -- use this to attribute
+      a regression to your own recent edit.
     arguments:
       - name: json_opts
         type: string
-        description: "JSON payload. Keys: 'path' (optional subpath to scope tests to)."
+        description: "Single-quoted JSON, 'path' key optional."
         required: false

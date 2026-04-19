@@ -95,14 +95,49 @@ def _build_config_yaml(
     if arm == "blastguard":
         bundles.append({"path": str(BUNDLE_PATH)})
 
+    # LiteLLM's cost tracking covers paid models but not free-tier or unlisted
+    # models. When the model isn't in its price table, SWE-agent raises
+    # ModelConfigurationError unless both cost limits are 0 (disabling the
+    # safety check). Free-tier models (`:free` suffix) have $0 spend by
+    # construction — override both caps to 0 so the harness proceeds.
+    is_free_tier = model.endswith(":free")
+    effective_per_instance_limit = 0.0 if is_free_tier else per_instance_cost_limit
+    effective_total_limit = 0.0
+
+    # System template carries arm-specific steering (BLASTGUARD_BIAS on BG arm).
+    # instance_template injects the SWE-bench problem statement via {{problem_statement}}.
+    # Without these, the agent receives empty prompts and makes nonsense tool
+    # calls until SWE-agent exits on format errors.
+    from bench.prompts import build_system_prompt  # noqa: PLC0415
+
+    system_template = build_system_prompt(arm=arm)
+    instance_template = (
+        "<uploaded_files>\n"
+        "{{working_dir}}\n"
+        "</uploaded_files>\n"
+        "Consider the following SWE-bench Pro task:\n\n"
+        "<task>\n"
+        "{{problem_statement}}\n"
+        "</task>\n\n"
+        "Make the minimal edits required to make the fail-to-pass tests "
+        "pass without breaking any pass-to-pass tests. When your edit is "
+        "complete, call the submit command."
+    )
+    next_step_template = "OBSERVATION:\n{{observation}}"
+
     config: dict[str, Any] = {
         "agent": {
+            "templates": {
+                "system_template": system_template,
+                "instance_template": instance_template,
+                "next_step_template": next_step_template,
+            },
             "model": {
                 "name": model,
                 "api_key": f"${api_key_env}",
                 "api_base": api_base,
-                "per_instance_cost_limit": per_instance_cost_limit,
-                "total_cost_limit": 0.0,
+                "per_instance_cost_limit": effective_per_instance_limit,
+                "total_cost_limit": effective_total_limit,
                 "temperature": 0.0,
                 "max_input_tokens": 200000,
                 "max_output_tokens": 8192,
