@@ -406,6 +406,127 @@ pub fn resolve_imports(graph: &mut CodeGraph, project_root: &Path) {
     }
 }
 
+/// Walk every `EdgeKind::Calls` edge with [`Confidence::Unresolved`] whose
+/// target symbol is NOT present in `to.file`, and try to pin it to a single
+/// imported file that declares a symbol with the matching name. On a unique
+/// match, rewrite `to.file` (and `to.kind`) and upgrade confidence to
+/// [`Confidence::Inferred`] — not `Certain` because Python dynamic dispatch
+/// and JS duck-typing can shadow the resolved target.
+///
+/// Must run AFTER [`resolve_imports`] because it relies on `Imports` edges
+/// having real file paths and `Confidence::Certain`.
+pub fn resolve_calls(graph: &mut CodeGraph) {
+    type Rewrite = (SymbolId, usize, PathBuf, crate::graph::types::SymbolKind);
+
+    // Precompute per-file symbol-name sets so the inner loop is O(1) instead
+    // of O(file_size).
+    let file_names: HashMap<PathBuf, Vec<(String, crate::graph::types::SymbolKind)>> = graph
+        .file_symbols
+        .iter()
+        .map(|(file, ids)| {
+            let names = ids
+                .iter()
+                .filter_map(|id| {
+                    graph
+                        .symbols
+                        .get(id)
+                        .map(|s| (s.id.name.clone(), s.id.kind))
+                })
+                .collect();
+            (file.clone(), names)
+        })
+        .collect();
+
+    // Precompute per-file: resolved imported files (Imports+Certain edges).
+    let mut file_imports: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    for (from_id, edges) in &graph.forward_edges {
+        for e in edges {
+            if e.kind == EdgeKind::Imports && e.confidence == Confidence::Certain {
+                file_imports
+                    .entry(from_id.file.clone())
+                    .or_default()
+                    .push(e.to.file.clone());
+            }
+        }
+    }
+
+    // Phase 1: collect rewrites.
+    let mut rewrites: Vec<Rewrite> = Vec::new();
+    for (from_id, edges) in &graph.forward_edges {
+        for (idx, edge) in edges.iter().enumerate() {
+            if edge.kind != EdgeKind::Calls || edge.confidence != Confidence::Unresolved {
+                continue;
+            }
+            let target_name = &edge.to.name;
+
+            // Intra-file: if to.file declares a symbol with this name, the
+            // parser's placeholder is actually correct — leave it.
+            if let Some(names) = file_names.get(&edge.to.file) {
+                if names.iter().any(|(n, _)| n == target_name) {
+                    continue;
+                }
+            }
+
+            // Cross-file: search imports of from.file for a unique match.
+            let Some(imports) = file_imports.get(&from_id.file) else {
+                continue;
+            };
+            let mut matches: Vec<(PathBuf, crate::graph::types::SymbolKind)> = Vec::new();
+            for imp_file in imports {
+                if let Some(names) = file_names.get(imp_file) {
+                    for (n, k) in names {
+                        if n == target_name && !matches.iter().any(|(f, _)| f == imp_file) {
+                            matches.push((imp_file.clone(), *k));
+                        }
+                    }
+                }
+            }
+            if matches.len() == 1 {
+                if let Some((f, k)) = matches.into_iter().next() {
+                    rewrites.push((from_id.clone(), idx, f, k));
+                }
+            }
+        }
+    }
+
+    // Phase 2: apply rewrites.
+    for (from_id, idx, new_path, new_kind) in rewrites {
+        let Some(edges) = graph.forward_edges.get_mut(&from_id) else {
+            continue;
+        };
+        let Some(edge) = edges.get_mut(idx) else {
+            continue;
+        };
+        let old_to = edge.to.clone();
+        if old_to.file == new_path && old_to.kind == new_kind {
+            continue;
+        }
+        let mut new_to = old_to.clone();
+        new_to.file = new_path;
+        new_to.kind = new_kind;
+        edge.to = new_to.clone();
+        edge.confidence = Confidence::Inferred;
+        let updated = edge.clone();
+
+        if let Some(rev) = graph.reverse_edges.get_mut(&old_to) {
+            rev.retain(|e| !(e.from == from_id && e.kind == EdgeKind::Calls));
+            if rev.is_empty() {
+                graph.reverse_edges.remove(&old_to);
+            }
+        }
+        graph
+            .reverse_edges
+            .entry(new_to.clone())
+            .or_default()
+            .push(updated);
+
+        if let Some(c) = graph.centrality.get_mut(&old_to) {
+            *c = c.saturating_sub(1);
+        }
+        *graph.centrality.entry(new_to).or_insert(0) += 1;
+    }
+}
+
 /// Strip `//` line comments from a JSONC string.
 ///
 /// Only line comments are handled. Block comments are rare in tsconfig files
@@ -836,6 +957,179 @@ mod tests {
     }
 
     #[test]
+    fn resolve_calls_rewrites_unresolved_call_to_imported_file() {
+        use crate::graph::types::{Edge, EdgeKind, Symbol, SymbolId, SymbolKind, Visibility};
+
+        let handler = PathBuf::from("src/handler.py");
+        let auth = PathBuf::from("src/utils/auth.py");
+
+        let mut graph = CodeGraph::new();
+        // login() is declared in auth.py.
+        graph.insert_symbol(Symbol {
+            id: SymbolId {
+                file: auth.clone(),
+                name: "login".to_owned(),
+                kind: SymbolKind::Function,
+            },
+            line_start: 1,
+            line_end: 3,
+            signature: "def login(user)".to_owned(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Export,
+            body_hash: 0,
+            is_async: false,
+            embedding_id: None,
+        });
+        // handle() is declared in handler.py.
+        graph.insert_symbol(Symbol {
+            id: SymbolId {
+                file: handler.clone(),
+                name: "handle".to_owned(),
+                kind: SymbolKind::Function,
+            },
+            line_start: 3,
+            line_end: 5,
+            signature: "def handle(req)".to_owned(),
+            params: vec![],
+            return_type: None,
+            visibility: Visibility::Export,
+            body_hash: 0,
+            is_async: false,
+            embedding_id: None,
+        });
+        // Resolved Imports edge: handler.py → auth.py.
+        graph.insert_edge(Edge {
+            from: SymbolId {
+                file: handler.clone(),
+                name: "handler".to_owned(),
+                kind: SymbolKind::Module,
+            },
+            to: SymbolId {
+                file: auth.clone(),
+                name: String::new(),
+                kind: SymbolKind::Module,
+            },
+            kind: EdgeKind::Imports,
+            line: 1,
+            confidence: Confidence::Certain,
+        });
+        // Placeholder Calls edge emitted by the parser: handle() → login
+        // with to.file = handler.py (wrong — login is in auth.py).
+        graph.insert_edge(Edge {
+            from: SymbolId {
+                file: handler.clone(),
+                name: "handle".to_owned(),
+                kind: SymbolKind::Function,
+            },
+            to: SymbolId {
+                file: handler.clone(),
+                name: "login".to_owned(),
+                kind: SymbolKind::Function,
+            },
+            kind: EdgeKind::Calls,
+            line: 4,
+            confidence: Confidence::Unresolved,
+        });
+
+        resolve_calls(&mut graph);
+
+        // The Calls edge's to.file should now point at auth.py and be Inferred.
+        let call_edges: Vec<_> = graph
+            .forward_edges
+            .values()
+            .flatten()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
+        assert_eq!(call_edges.len(), 1);
+        assert_eq!(call_edges[0].to.file, auth);
+        assert_eq!(call_edges[0].confidence, Confidence::Inferred);
+
+        // reverse_edges should be rekeyed to auth.py::login.
+        let resolved_target = SymbolId {
+            file: auth,
+            name: "login".to_owned(),
+            kind: SymbolKind::Function,
+        };
+        assert!(graph.reverse_edges.contains_key(&resolved_target));
+    }
+
+    #[test]
+    fn resolve_calls_leaves_ambiguous_match_alone() {
+        use crate::graph::types::{Edge, EdgeKind, Symbol, SymbolId, SymbolKind, Visibility};
+
+        let handler = PathBuf::from("src/handler.py");
+        let a = PathBuf::from("src/a.py");
+        let b = PathBuf::from("src/b.py");
+
+        let mut graph = CodeGraph::new();
+        for (file, name) in [(a.clone(), "login"), (b.clone(), "login")] {
+            graph.insert_symbol(Symbol {
+                id: SymbolId {
+                    file: file.clone(),
+                    name: name.to_owned(),
+                    kind: SymbolKind::Function,
+                },
+                line_start: 1,
+                line_end: 1,
+                signature: name.to_owned(),
+                params: vec![],
+                return_type: None,
+                visibility: Visibility::Export,
+                body_hash: 0,
+                is_async: false,
+                embedding_id: None,
+            });
+        }
+        // handler.py imports BOTH a.py and b.py.
+        for imp in [&a, &b] {
+            graph.insert_edge(Edge {
+                from: SymbolId {
+                    file: handler.clone(),
+                    name: "handler".to_owned(),
+                    kind: SymbolKind::Module,
+                },
+                to: SymbolId {
+                    file: imp.clone(),
+                    name: String::new(),
+                    kind: SymbolKind::Module,
+                },
+                kind: EdgeKind::Imports,
+                line: 1,
+                confidence: Confidence::Certain,
+            });
+        }
+        // Placeholder call — ambiguous (both imports declare `login`).
+        graph.insert_edge(Edge {
+            from: SymbolId {
+                file: handler.clone(),
+                name: "handle".to_owned(),
+                kind: SymbolKind::Function,
+            },
+            to: SymbolId {
+                file: handler.clone(),
+                name: "login".to_owned(),
+                kind: SymbolKind::Function,
+            },
+            kind: EdgeKind::Calls,
+            line: 1,
+            confidence: Confidence::Unresolved,
+        });
+
+        resolve_calls(&mut graph);
+
+        // Ambiguous: should NOT rewrite.
+        let call = graph
+            .forward_edges
+            .values()
+            .flatten()
+            .find(|e| e.kind == EdgeKind::Calls)
+            .expect("call edge missing");
+        assert_eq!(call.to.file, handler);
+        assert_eq!(call.confidence, Confidence::Unresolved);
+    }
+
+    #[test]
     fn resolve_imports_upgrades_python_dotted_edge() {
         use crate::graph::types::{Edge, EdgeKind, SymbolId, SymbolKind};
 
@@ -862,11 +1156,7 @@ mod tests {
 
         resolve_imports(&mut graph, tmp.path());
 
-        let edges = graph
-            .forward_edges
-            .values()
-            .flatten()
-            .collect::<Vec<_>>();
+        let edges = graph.forward_edges.values().flatten().collect::<Vec<_>>();
         assert_eq!(edges[0].to.file, auth);
         assert_eq!(edges[0].confidence, Confidence::Certain);
     }

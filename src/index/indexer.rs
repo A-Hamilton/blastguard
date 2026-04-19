@@ -90,6 +90,11 @@ pub fn cold_index(project_root: &Path) -> Result<CodeGraph> {
     // callers_of / importers_of can cross files.
     crate::parse::resolve::resolve_imports(&mut graph, project_root);
 
+    // Then try to pin each Unresolved Calls edge at a unique function in the
+    // from-file's imports — upgrades to Inferred when exactly one candidate
+    // exists. Relies on resolve_imports having run first.
+    crate::parse::resolve::resolve_calls(&mut graph);
+
     // Persist the fresh cache so the next run can warm-start. Best-effort:
     // a write failure should not cause the caller's index to fail.
     let mut file_hashes = HashMap::new();
@@ -233,6 +238,7 @@ pub fn warm_start(project_root: &Path) -> Result<CodeGraph> {
     // Cheaper than persisting the resolved state across warm starts and
     // keeps resolver logic in one place.
     crate::parse::resolve::resolve_imports(&mut graph, project_root);
+    crate::parse::resolve::resolve_calls(&mut graph);
 
     // Persist the updated cache.
     let mut tree_hashes = HashMap::new();
