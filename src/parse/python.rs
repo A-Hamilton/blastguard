@@ -210,28 +210,29 @@ fn emit_simple(
     });
 }
 
-/// Emit a [`LibraryImport`] for either an `import X` or `from X import Y`
-/// statement. `module_path` is the dotted name or relative import text
-/// (e.g. `"utils.auth"`, `"os.path"`, `"."`, `"..utils"`).
+/// Emit an `Imports` edge (with `Confidence::Unresolved`) AND a
+/// [`LibraryImport`] for either an `import X` or `from X import Y` statement.
+///
+/// `module_path` is the dotted name or relative import text (e.g.
+/// `"utils.auth"`, `"os.path"`, `"."`, `"..utils"`).
+///
+/// Why both: we can't tell at parse time whether `utils.auth` is a project
+/// package or a third-party library — only the resolver (which can read the
+/// filesystem) knows. So we emit optimistic records of both kinds and let the
+/// post-parse `resolve_imports` pass upgrade the `Imports` edge to a real
+/// file path when it's internal. For imports that resolve to an external
+/// package, the `LibraryImport` entry is the authoritative record used by the
+/// `libraries` query.
 ///
 /// For relative imports (those beginning with `.`), leading dots are stripped
-/// before extracting the first segment:
-/// - `"."` or `".."` (no module name after the dots) → `library = "."` sentinel.
-///   Task 10 will resolve relative to the file's directory.
-/// - `"..utils"` → `library = "utils"` (first segment after stripping dots).
-///
-/// Task 10 re-classifies entries whose first segment resolves to a project
-/// package as internal `Imports` edges.
+/// before storing — `resolve_py` doesn't currently walk parent packages, so
+/// `"..utils"` is resolved the same as `"utils"`.
 fn emit_import(module_path: &str, node: tree_sitter::Node<'_>, path: &Path, out: &mut ParseOutput) {
     if module_path.is_empty() {
         return;
     }
-    // Strip leading dots for relative imports — the number of dots indicates
-    // how many parent packages to walk up. Task 10 resolves the full path.
     let stripped = module_path.trim_start_matches('.');
     let library = if stripped.is_empty() {
-        // `from . import foo` or `from .. import foo` — sibling/parent import
-        // with no module-name component.
         ".".to_owned()
     } else {
         stripped.split('.').next().unwrap_or(stripped).to_owned()
@@ -245,6 +246,33 @@ fn emit_import(module_path: &str, node: tree_sitter::Node<'_>, path: &Path, out:
         symbol: String::new(),
         file: path.to_path_buf(),
         line,
+    });
+
+    // Emit the Imports edge only when there is an actual module name to
+    // resolve — `from . import foo` (stripped == "") has no spec to point the
+    // resolver at.
+    if stripped.is_empty() {
+        return;
+    }
+    let module_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_owned();
+    out.edges.push(Edge {
+        from: SymbolId {
+            file: path.to_path_buf(),
+            name: module_name,
+            kind: SymbolKind::Module,
+        },
+        to: SymbolId {
+            file: std::path::PathBuf::from(stripped),
+            name: String::new(),
+            kind: SymbolKind::Module,
+        },
+        kind: EdgeKind::Imports,
+        line,
+        confidence: Confidence::Unresolved,
     });
 }
 
@@ -460,9 +488,32 @@ def _private_helper():
     fn imports_captured_as_library_imports() {
         let out = extract(&PathBuf::from("src/handler.py"), SAMPLE);
         // `import os` and `from utils.auth import verify` both land in library_imports
-        // keyed by the first dotted segment. Task 10 will re-classify internals.
+        // keyed by the first dotted segment. resolve_imports will later promote
+        // the internal ones to Imports edges with real file paths.
         assert!(out.library_imports.iter().any(|li| li.library == "os"));
         assert!(out.library_imports.iter().any(|li| li.library == "utils"));
+    }
+
+    #[test]
+    fn imports_also_emitted_as_edges_for_resolver() {
+        let out = extract(&PathBuf::from("src/handler.py"), SAMPLE);
+        // Both imports should also appear as Imports edges with Unresolved
+        // confidence — the post-parse resolver decides internal vs external.
+        let import_edges: Vec<_> = out
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Imports)
+            .collect();
+        assert!(
+            import_edges.iter().any(|e| e.to.file.to_string_lossy() == "os"),
+            "expected Imports edge with spec='os'; edges = {import_edges:?}"
+        );
+        assert!(
+            import_edges
+                .iter()
+                .any(|e| e.to.file.to_string_lossy() == "utils.auth"),
+            "expected Imports edge with spec='utils.auth'; edges = {import_edges:?}"
+        );
     }
 
     #[test]

@@ -359,6 +359,7 @@ pub fn resolve_imports(graph: &mut CodeGraph, project_root: &Path) {
                 "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => {
                     resolve_ts(project_root, &from_id.file, &spec, tsconfig.as_ref())
                 }
+                "py" | "pyi" => resolve_py(project_root, &from_id.file, &spec),
                 _ => continue,
             };
             if let ResolveResult::Internal(new_path) = result {
@@ -832,6 +833,42 @@ mod tests {
             "unresolvable spec should remain untouched"
         );
         assert_eq!(edges[0].confidence, Confidence::Unresolved);
+    }
+
+    #[test]
+    fn resolve_imports_upgrades_python_dotted_edge() {
+        use crate::graph::types::{Edge, EdgeKind, SymbolId, SymbolKind};
+
+        let tmp = tempdir_with(&[("src/handler.py", ""), ("src/utils/auth.py", "")]);
+        let handler = tmp.path().join("src/handler.py");
+        let auth = tmp.path().join("src/utils/auth.py");
+
+        let mut graph = CodeGraph::new();
+        graph.insert_edge(Edge {
+            from: SymbolId {
+                file: handler.clone(),
+                name: "handler".to_owned(),
+                kind: SymbolKind::Module,
+            },
+            to: SymbolId {
+                file: PathBuf::from("utils.auth"),
+                name: String::new(),
+                kind: SymbolKind::Module,
+            },
+            kind: EdgeKind::Imports,
+            line: 1,
+            confidence: Confidence::Unresolved,
+        });
+
+        resolve_imports(&mut graph, tmp.path());
+
+        let edges = graph
+            .forward_edges
+            .values()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(edges[0].to.file, auth);
+        assert_eq!(edges[0].confidence, Confidence::Certain);
     }
 
     #[test]
