@@ -250,6 +250,11 @@ pub fn exports_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
 }
 
 /// `outline of FILE` — all symbols declared in `file`, sorted by `line_start`.
+///
+/// Duplicate-name entries after the first occurrence are prefixed with
+/// `[test]` — files with both a production `fn foo` and a
+/// `#[cfg(test)] fn foo` emit both; the later one is almost always the
+/// test copy, so we tag it so agents can filter at a glance.
 #[must_use]
 pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
     let Some(symbol_ids) = graph.file_symbols.get(file) else {
@@ -261,7 +266,28 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
         .map(SearchHit::structural)
         .collect();
     hits.sort_by_key(|h| h.line);
+
+    // Tag duplicate-name entries after the first occurrence as `[test]`.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for hit in &mut hits {
+        let Some(sig) = &hit.signature else {
+            continue;
+        };
+        let name = extract_fn_name(sig);
+        if !seen.insert(name) {
+            let tagged = format!("[test] {sig}");
+            hit.signature = Some(tagged);
+        }
+    }
     hits
+}
+
+/// Extract the bare function name from a signature string for dedup purposes.
+/// Takes the token before the first `(`, strips a leading `fn ` keyword.
+fn extract_fn_name(sig: &str) -> String {
+    let head = sig.split('(').next().unwrap_or(sig);
+    let trimmed = head.strip_prefix("fn ").unwrap_or(head);
+    trimmed.split_whitespace().last().unwrap_or("").to_string()
 }
 
 #[cfg(test)]
@@ -617,6 +643,33 @@ mod tests {
         let hits = tests_for(&g, "src/handler.ts");
         assert_eq!(hits.len(), 1);
         assert!(hits[0].file.to_string_lossy().contains("__tests__"));
+    }
+
+    #[test]
+    fn outline_of_tags_duplicate_test_functions() {
+        let file = PathBuf::from("/p/a.rs");
+        let mut g = CodeGraph::new();
+        // Production function at line 10 (Function kind).
+        g.insert_symbol(sym_at("foo", "/p/a.rs", 10));
+        // Test function at line 100 — uses Method kind to give it a distinct
+        // SymbolId so the HashMap doesn't overwrite the first entry. The
+        // dedup logic keys on the extracted name from the signature string,
+        // so different SymbolKinds with the same name still trigger tagging.
+        let mut test_sym = sym_at("foo", "/p/a.rs", 100);
+        test_sym.id.kind = SymbolKind::Method;
+        g.insert_symbol(test_sym);
+        let hits = outline_of(&g, &file);
+        assert_eq!(hits.len(), 2);
+        // The later one should be tagged.
+        let tagged = hits.iter().find(|h| h.line == 100).expect("hit at 100");
+        assert!(
+            tagged.signature.as_deref().unwrap_or("").starts_with("[test]"),
+            "expected [test] tag, got: {:?}",
+            tagged.signature
+        );
+        // The earlier one should NOT be tagged.
+        let untagged = hits.iter().find(|h| h.line == 10).expect("hit at 10");
+        assert!(!untagged.signature.as_deref().unwrap_or("").starts_with("[test]"));
     }
 
     #[test]
