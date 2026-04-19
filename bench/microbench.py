@@ -28,59 +28,10 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Tasks — real exploration questions against this repo.
+# Tasks — imported from the centralized registry.
 # ---------------------------------------------------------------------------
 
-TASKS = [
-    {
-        "id": "explore-cold-index",
-        "prompt": (
-            "Using the tools available, explore the BlastGuard Rust codebase at "
-            "{project_root} and explain what the `cold_index` function does and "
-            "what calls it. Answer in 3-5 sentences. When done, write 'DONE' "
-            "on its own line."
-        ),
-    },
-    {
-        "id": "callers-apply-edit",
-        "prompt": (
-            "In the BlastGuard Rust repo at {project_root}, find every caller of "
-            "the `apply_edit` function. For each caller, briefly describe what "
-            "it is (function name + file) and what kind of value it passes for "
-            "the `old_text` argument. Answer concisely. Write 'DONE' when finished."
-        ),
-    },
-    {
-        # Multi-hop cross-file navigation — harder, closer to BlastGuard's
-        # design sweet spot (even though Phase 1 caller edges are intra-file,
-        # chain queries span multiple symbols).
-        "id": "chain-search-to-graph",
-        "prompt": (
-            "In the BlastGuard Rust repo at {project_root}, find the call chain "
-            "from the MCP `search` tool entry point down into the code-graph "
-            "module. In other words: when the MCP search tool is invoked, which "
-            "intermediate function(s) get called on the way to the graph "
-            "operations? Name each function (file + function name) in order. "
-            "Keep the answer under 10 lines. Write 'DONE' when finished."
-        ),
-    },
-    {
-        # Cascade/blast-radius question — exactly what apply_change is
-        # designed to answer but we're asking it without telling the model
-        # "use apply_change". Reveals whether the model reaches for it
-        # unprompted.
-        "id": "cascade-signature-change",
-        "prompt": (
-            "In the BlastGuard Rust repo at {project_root}, suppose we wanted "
-            "to change the signature of `apply_edit` to take a single `Edit` "
-            "struct instead of three separate `&Path`, `&str`, `&str` "
-            "arguments. List every function that would need to be updated, "
-            "and explain why. Keep the answer concise — just a bulleted list "
-            "with the file:line of each caller and a one-line reason. "
-            "Write 'DONE' when finished."
-        ),
-    },
-]
+from bench.tasks_registry import TASKS  # noqa: E402
 
 
 # Optional BlastGuard-arm steering — appended to the BG arm's system prompt
