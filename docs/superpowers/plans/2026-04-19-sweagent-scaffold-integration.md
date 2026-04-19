@@ -1020,7 +1020,7 @@ git commit -m "bench: wire runner.py to sweagent_runner per arm"
 - Modify: `bench/agent_loop.py` (strip everything except imports if any callers remain)
 - Delete (if no callers): `bench/agent_loop.py`
 
-- [ ] **Step 1: Check for callers**
+- [x] **Step 1: Check for callers**
 
 ```bash
 cd /home/adam/Documents/blastguard && grep -r --include='*.py' 'from bench.agent_loop\|import agent_loop' bench/ || echo 'no importers'
@@ -1028,7 +1028,7 @@ cd /home/adam/Documents/blastguard && grep -r --include='*.py' 'from bench.agent
 
 Expected: `no importers` OR only `bench/tests/` importing `TokenCount` — which we've moved. Update any test imports to `from bench.token_count import TokenCount`.
 
-- [ ] **Step 2: Delete the file and its test (if present)**
+- [x] **Step 2: Delete the file and its test (if present)**
 
 ```bash
 cd /home/adam/Documents/blastguard && git rm bench/agent_loop.py bench/tests/test_agent_loop.py 2>/dev/null || true
@@ -1036,7 +1036,7 @@ cd /home/adam/Documents/blastguard && git rm bench/agent_loop.py bench/tests/tes
 
 (The `|| true` handles missing test file without blowing up.)
 
-- [ ] **Step 3: Verify tests still pass**
+- [x] **Step 3: Verify tests still pass**
 
 ```bash
 cd /home/adam/Documents/blastguard/bench && HF_HOME=/tmp/hf uv run pytest -v
@@ -1044,7 +1044,7 @@ cd /home/adam/Documents/blastguard/bench && HF_HOME=/tmp/hf uv run pytest -v
 
 Expected: all prior tests still pass, plus the new tests from Tasks 2 and 4. Fix any import errors by retargeting `TokenCount` to its new home.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A && git commit -m "bench: retire custom agent loop; SWE-agent is now the scaffold"
@@ -1062,7 +1062,7 @@ SWE-agent can emit `trajectory.json` with `exit_status: "exit_timeout"` when a t
 
 This only affects our pre-evaluator patch generation. The `SWE-bench_Pro-os` evaluator already classifies patch-less tasks as unresolved; we need to flag them earlier so `pair_results()` drops them symmetrically.
 
-- [ ] **Step 1: Add the test**
+- [x] **Step 1: Add the test**
 
 Append to `bench/tests/test_evaluator.py`:
 
@@ -1085,14 +1085,14 @@ def test_parse_evaluator_output_flags_empty_patch(tmp_path: Path):
     assert "empty_patch" in (r.raw.get("error") or "")
 ```
 
-- [ ] **Step 2: Confirm failure**
+- [x] **Step 2: Confirm failure**
 
 ```bash
 cd /home/adam/Documents/blastguard/bench && uv run pytest tests/test_evaluator.py -v
 ```
 Expected: the new test FAILS — current `parse_evaluator_output` doesn't check for empty patches.
 
-- [ ] **Step 3: Extend `parse_evaluator_output`**
+- [x] **Step 3: Extend `parse_evaluator_output`**
 
 Open `bench/evaluator.py`. In the `for path in sorted(...)` loop, inside the `else` branch that builds the `EvaluatorResult`, change the logic:
 
@@ -1115,14 +1115,14 @@ results.append(
 )
 ```
 
-- [ ] **Step 4: Confirm all tests pass**
+- [x] **Step 4: Confirm all tests pass**
 
 ```bash
 cd /home/adam/Documents/blastguard/bench && uv run pytest tests/test_evaluator.py -v
 ```
 Expected: 4 PASS (3 existing + 1 new).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bench/evaluator.py bench/tests/test_evaluator.py
@@ -1139,7 +1139,7 @@ git commit -m "bench: treat empty-patch outputs as infra_failure in paired analy
 
 When OpenRouter returns 429, SWE-agent's underlying LiteLLM call surfaces it as a non-zero exit. We want to retry the task once after a 60-second cooldown rather than burning it. One retry is the cap — two is a loop trap.
 
-- [ ] **Step 1: Add the test**
+- [x] **Step 1: Add the test**
 
 Append to `bench/tests/test_sweagent_runner.py`:
 
@@ -1193,11 +1193,11 @@ def test_run_arm_retries_once_on_rate_limit(fake_sweagent, tmp_path, monkeypatch
     assert int(counter_file.read_text()) == 2  # called exactly twice
 ```
 
-- [ ] **Step 2: Confirm failure**
+- [x] **Step 2: Confirm failure**
 
 Expected: FAIL — current `run_arm` only invokes once.
 
-- [ ] **Step 3: Wrap the subprocess call with retry logic**
+- [x] **Step 3: Wrap the subprocess call with retry logic**
 
 In `bench/sweagent_runner.py`, replace the `proc = subprocess.run(args, ...)` block with:
 
@@ -1231,14 +1231,14 @@ In `bench/sweagent_runner.py`, replace the `proc = subprocess.run(args, ...)` bl
         )
 ```
 
-- [ ] **Step 4: Confirm all tests pass**
+- [x] **Step 4: Confirm all tests pass**
 
 ```bash
 cd /home/adam/Documents/blastguard/bench && uv run pytest tests/test_sweagent_runner.py -v
 ```
 Expected: 3 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bench/sweagent_runner.py bench/tests/test_sweagent_runner.py
