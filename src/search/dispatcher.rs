@@ -9,10 +9,16 @@ use crate::graph::types::CodeGraph;
 use super::query::{classify, QueryKind};
 use super::{structural, SearchHit};
 
-/// Default cap for structural results. Matches the token budget in SPEC §3
-/// for list-style queries (50-150 tokens for callers/callees; keeping 10
-/// hits leaves headroom for inline signatures).
-const DEFAULT_MAX_HITS: usize = 10;
+/// Per-query-type result caps. `outline` / `exports` need headroom for
+/// files with 30+ symbols; `find` only needs exact + 4 fuzzy
+/// alternatives; `callers` / `callees` are bounded by same-file scope
+/// in Phase 1 so 10 is fine. `libraries` and `grep` follow SPEC §3.
+const OUTLINE_MAX_HITS: usize = 50;
+const EXPORTS_MAX_HITS: usize = 50;
+const FIND_MAX_HITS: usize = 5;
+const CALLERS_MAX_HITS: usize = 10;
+const CALLEES_MAX_HITS: usize = 10;
+const LIBRARIES_MAX_HITS: usize = 30;
 
 /// Resolve a path argument from a query against `project_root`. The graph
 /// indexes symbols under absolute paths, so relative query paths (e.g.
@@ -32,11 +38,14 @@ fn resolve_query_path(project_root: &Path, path: &Path) -> PathBuf {
 #[must_use]
 pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<SearchHit> {
     match classify(query) {
-        QueryKind::Find(name) => structural::find(graph, &name, DEFAULT_MAX_HITS),
-        QueryKind::Callers(name) => structural::callers_of(graph, &name, DEFAULT_MAX_HITS),
-        QueryKind::Callees(name) => structural::callees_of(graph, &name, DEFAULT_MAX_HITS),
+        QueryKind::Find(name) => structural::find(graph, &name, FIND_MAX_HITS),
+        QueryKind::Callers(name) => structural::callers_of(graph, &name, CALLERS_MAX_HITS),
+        QueryKind::Callees(name) => structural::callees_of(graph, &name, CALLEES_MAX_HITS),
         QueryKind::Outline(path) => {
-            structural::outline_of(graph, &resolve_query_path(project_root, &path))
+            let mut hits =
+                structural::outline_of(graph, &resolve_query_path(project_root, &path));
+            hits.truncate(OUTLINE_MAX_HITS);
+            hits
         }
         QueryKind::Chain(from, to) => structural::chain_from_to(graph, &from, &to),
         QueryKind::ImportsOf(path) => {
@@ -46,10 +55,17 @@ pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<Sear
             structural::importers_of(graph, &resolve_query_path(project_root, &path))
         }
         QueryKind::ExportsOf(path) => {
-            structural::exports_of(graph, &resolve_query_path(project_root, &path))
+            let mut hits =
+                structural::exports_of(graph, &resolve_query_path(project_root, &path));
+            hits.truncate(EXPORTS_MAX_HITS);
+            hits
         }
         QueryKind::TestsFor(target) => structural::tests_for(graph, &target),
-        QueryKind::Libraries => structural::libraries(graph),
+        QueryKind::Libraries => {
+            let mut hits = structural::libraries(graph);
+            hits.truncate(LIBRARIES_MAX_HITS);
+            hits
+        }
         QueryKind::Grep(pattern) => super::text::grep(project_root, &pattern),
     }
 }
@@ -179,5 +195,56 @@ mod tests {
         let hits = dispatch(&g, tmp.path(), "NEEDLE");
         assert!(!hits.is_empty());
         assert!(hits[0].snippet.as_deref().unwrap().contains("NEEDLE"));
+    }
+
+    #[test]
+    fn outline_respects_50_hit_cap() {
+        let project_root = PathBuf::from("/proj/root");
+        let mut g = CodeGraph::new();
+        for i in 0..80_u32 {
+            g.insert_symbol(Symbol {
+                id: SymbolId {
+                    file: project_root.join("src/big.rs"),
+                    name: format!("fn_{i}"),
+                    kind: SymbolKind::Function,
+                },
+                line_start: i + 1,
+                line_end: i + 2,
+                signature: format!("fn fn_{i}()"),
+                params: vec![],
+                return_type: None,
+                visibility: Visibility::Export,
+                body_hash: 0,
+                is_async: false,
+                embedding_id: None,
+            });
+        }
+        let hits = dispatch(&g, &project_root, "outline of src/big.rs");
+        assert_eq!(hits.len(), 50, "outline should cap at 50");
+    }
+
+    #[test]
+    fn find_respects_5_hit_cap() {
+        let mut g = CodeGraph::new();
+        for i in 0..20_u32 {
+            g.insert_symbol(Symbol {
+                id: SymbolId {
+                    file: PathBuf::from(format!("/p/a{i}.rs")),
+                    name: format!("mytest_{i}"),
+                    kind: SymbolKind::Function,
+                },
+                line_start: 1,
+                line_end: 2,
+                signature: format!("fn mytest_{i}()"),
+                params: vec![],
+                return_type: None,
+                visibility: Visibility::Export,
+                body_hash: 0,
+                is_async: false,
+                embedding_id: None,
+            });
+        }
+        let hits = dispatch(&g, Path::new("/p"), "find mytest");
+        assert!(hits.len() <= 5, "find should cap at 5, got {}", hits.len());
     }
 }
