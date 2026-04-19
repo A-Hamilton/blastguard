@@ -5,7 +5,29 @@ All notable changes to BlastGuard are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — Phase 1 MVP (unreleased)
+## [0.1.0] — 2026-04-19 — Phase 1 MVP
+
+### Added (release summary)
+
+- Phase 1 feature-complete MCP server. See the detailed list below for
+  components added during Phase 1.
+- Benchmark harness (`bench/`) with SWE-agent scaffold integration, paired-
+  comparison orchestrator, McNemar's test, BenchJack tamper defense, and
+  budget caps. Infrastructure is live-verified; an end-to-end SWE-bench Pro
+  run is blocked by upstream Docker-tag handling in SWE-agent (see
+  `bench/KNOWN_GAPS.md`).
+
+### Known at release
+
+- No published BlastGuard lift number on SWE-bench Pro yet. Projection
+  remains +1 to +3 pp based on adjacent research (cAST, WarpGrep v2,
+  Auggie, CodeCompass).
+- Cross-file call edges are intra-file-only in Phase 1 — a documented
+  limitation; see README.
+
+---
+
+## [0.1.0-infrastructure] — Phase 1 MVP (original)
 
 ### Added
 
