@@ -42,6 +42,26 @@ impl SearchHit {
             snippet: Some(snippet),
         }
     }
+
+    /// Synthetic "no-match" hint. Used when a query returns no hits but there is
+    /// useful guidance about where the match might live — e.g. "no same-file
+    /// callers; try grep for cross-file".
+    #[must_use]
+    pub fn empty_hint(message: &str) -> Self {
+        Self {
+            file: PathBuf::new(),
+            line: 0,
+            signature: Some(message.to_owned()),
+            snippet: None,
+        }
+    }
+
+    /// Returns `true` if this hit is a synthetic hint rather than a real match.
+    /// Hint hits have an empty file path and `line == 0`.
+    #[must_use]
+    pub fn is_hint(&self) -> bool {
+        self.file.as_os_str().is_empty() && self.line == 0 && self.snippet.is_none()
+    }
 }
 
 /// Sort a slice of [`SymbolId`] references by reverse-edge centrality descending.

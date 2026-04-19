@@ -160,7 +160,7 @@ free-text search across files.",
 
     /// Apply one or more edits to a file with same-file cascade warnings.
     ///
-    /// Returns SIGNATURE / ASYNC_CHANGE / ORPHAN / INTERFACE_BREAK warnings
+    /// Returns `SIGNATURE` / `ASYNC_CHANGE` / `ORPHAN` / `INTERFACE_BREAK` warnings
     /// for callers in the same file plus their signatures. Multi-change edits
     /// roll back atomically on mid-sequence failure.
     ///
@@ -209,7 +209,7 @@ immediately. For cross-file blast radius, follow up with grep.",
     ///
     /// Failures are annotated with `YOU MODIFIED X (N edits ago)` when a
     /// failing stack frame lands inside a symbol the session recently edited
-    /// via apply_change. Use after an edit to tie regressions to recent work.
+    /// via `apply_change`. Use after an edit to tie regressions to recent work.
     #[tool(
         name = "run_tests",
         description = "Run the project's test suite (auto-detects jest / vitest / pytest / cargo). \

@@ -33,6 +33,7 @@ pub fn build(graph: &CodeGraph, file: &Path, changed: &[Symbol]) -> BundledConte
 
     let tests: Vec<String> = tests_for(graph, &file.to_string_lossy())
         .into_iter()
+        .filter(|h| !h.is_hint())
         .map(|h| h.file.to_string_lossy().to_string())
         .collect::<std::collections::BTreeSet<String>>()
         .into_iter()

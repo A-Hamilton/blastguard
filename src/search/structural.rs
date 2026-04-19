@@ -56,20 +56,30 @@ pub fn callers_of_id(graph: &CodeGraph, id: &SymbolId, max_hits: usize) -> Vec<S
 pub fn callers_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
     let mut targets = find_by_name(graph, name);
     if targets.is_empty() {
-        return Vec::new();
+        return vec![SearchHit::empty_hint(&format!(
+            "no symbol named '{name}' found; try `find {name}` for fuzzy matches or grep across files"
+        ))];
     }
     sort_by_centrality(graph, &mut targets);
     let Some(&target_id) = targets.first() else {
-        return Vec::new();
+        return vec![SearchHit::empty_hint(&format!(
+            "no symbol named '{name}' found; try `find {name}` for fuzzy matches or grep across files"
+        ))];
     };
     let mut caller_ids: Vec<&SymbolId> = callers(graph, target_id);
     sort_by_centrality(graph, &mut caller_ids);
-    caller_ids
+    let hits: Vec<SearchHit> = caller_ids
         .into_iter()
         .take(max_hits)
         .filter_map(|id| graph.symbols.get(id))
         .map(SearchHit::structural)
-        .collect()
+        .collect();
+    if hits.is_empty() {
+        return vec![SearchHit::empty_hint(
+            "no same-file callers in Phase 1 graph; for cross-file callers, use grep",
+        )];
+    }
+    hits
 }
 
 /// `callees of X` / `what does X call` — forward edges with inline signatures.
@@ -114,7 +124,9 @@ pub fn chain_from_to(graph: &CodeGraph, from_name: &str, to_name: &str) -> Vec<S
 #[must_use]
 pub fn imports_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
     let Some(sym_ids) = graph.file_symbols.get(file) else {
-        return Vec::new();
+        return vec![SearchHit::empty_hint(
+            "no internal imports in Phase 1 graph; use grep for \"use X::\"",
+        )];
     };
     let mut hits = Vec::new();
     for sid in sym_ids {
@@ -131,6 +143,11 @@ pub fn imports_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
                 });
             }
         }
+    }
+    if hits.is_empty() {
+        return vec![SearchHit::empty_hint(
+            "no internal imports in Phase 1 graph; use grep for \"use X::\"",
+        )];
     }
     hits
 }
@@ -198,15 +215,23 @@ pub fn tests_for(graph: &CodeGraph, target: &str) -> Vec<SearchHit> {
     } else {
         let ids = find_by_name(graph, target);
         let Some(&id) = ids.first() else {
-            return Vec::new();
+            return vec![SearchHit::empty_hint(&format!(
+                "no same-file tests found; use grep for 'test_{target}'"
+            ))];
         };
         id.file.clone()
     };
 
-    importers_of(graph, &target_file)
+    let hits: Vec<SearchHit> = importers_of(graph, &target_file)
         .into_iter()
         .filter(|hit| is_test_path(&hit.file))
-        .collect()
+        .collect();
+    if hits.is_empty() {
+        return vec![SearchHit::empty_hint(&format!(
+            "no same-file tests found; use grep for 'test_{target}'"
+        ))];
+    }
+    hits
 }
 
 /// `exports of FILE` — visibility-filtered symbols declared in `file`.
@@ -362,7 +387,11 @@ mod tests {
     fn callers_of_empty_when_target_missing() {
         let g = CodeGraph::new();
         let hits = callers_of(&g, "nonexistent", 10);
-        assert!(hits.is_empty());
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0]
+            .signature
+            .as_deref()
+            .is_some_and(|s| s.contains("nonexistent")));
     }
 
     #[test]
@@ -554,8 +583,9 @@ mod tests {
         let mut g = CodeGraph::new();
         g.insert_symbol(sym("processRequest", "src/handler.ts"));
         let hits = tests_for(&g, "processRequest");
-        // No importers at all → empty; just verifies it doesn't panic.
-        assert!(hits.is_empty());
+        // No importers at all → hint; just verifies it doesn't panic.
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].signature.as_deref().is_some_and(|s| s.contains("grep")));
     }
 
     #[test]
@@ -618,6 +648,17 @@ mod tests {
         let hits = tests_for(&g, "src/handler.ts");
         assert_eq!(hits.len(), 1);
         assert!(hits[0].file.to_string_lossy().contains(".spec."));
+    }
+
+    #[test]
+    fn callers_of_returns_hint_when_no_callers_found() {
+        let mut g = CodeGraph::new();
+        g.insert_symbol(sym("orphan", "a.rs"));
+        let hits = callers_of(&g, "orphan", 10);
+        assert_eq!(hits.len(), 1);
+        let hint = hits[0].signature.as_deref().expect("hint signature");
+        assert!(hint.contains("cross-file"));
+        assert!(hint.contains("grep"));
     }
 
     #[test]
