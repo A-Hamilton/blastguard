@@ -25,6 +25,7 @@ import json
 import os
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -225,21 +226,34 @@ def run_arm(
         if blastguard_binary is not None:
             env["BLASTGUARD_BINARY"] = str(blastguard_binary)
 
-    proc = subprocess.run(
-        args,
-        env=env,
-        timeout=timeout_seconds,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
+    rate_limit_sleep = int(os.environ.get("BENCH_RATE_LIMIT_SLEEP", "60"))
     instance_dir = output_dir / task.task_id
     traj_path = instance_dir / f"{task.task_id}.traj"
+    last_proc: subprocess.CompletedProcess[str] | None = None
+
+    for attempt in (1, 2):
+        last_proc = subprocess.run(
+            args,
+            env=env,
+            timeout=timeout_seconds,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if traj_path.exists():
+            break
+        # Retry once on rate-limit signals; any other failure falls through.
+        if attempt == 1 and "rate" in last_proc.stderr.lower():
+            time.sleep(rate_limit_sleep)
+            continue
+        break
+
     if not traj_path.exists():
+        assert last_proc is not None
         raise FileNotFoundError(
-            f"sweagent exited {proc.returncode} and wrote no trajectory for "
-            f"{task.task_id!r}. stderr:\n{proc.stderr[:2000]}"
+            f"sweagent exited {last_proc.returncode} and wrote no trajectory for "
+            f"{task.task_id!r} after {attempt} attempt(s). "
+            f"stderr:\n{last_proc.stderr[:2000]}"
         )
 
     patch, tokens, exit_status = _parse_trajectory(instance_dir, task.task_id)

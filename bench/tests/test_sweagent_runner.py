@@ -182,3 +182,50 @@ def test_run_arm_blastguard_generates_config_with_bundle(
         f"BlastGuard bundle path not found in config bundles: {bundle_paths}\n"
         f"Expected to contain: {BUNDLE_PATH}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 3: rate-limit retry
+# ---------------------------------------------------------------------------
+
+
+def test_run_arm_retries_once_on_rate_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """First invocation exits non-zero with 'RateLimitError' in stderr;
+    second invocation succeeds and writes trajectory + pred."""
+    counter_file = tmp_path / "count.txt"
+    counter_file.write_text("0")
+
+    # The fake writes trajectories on the SECOND call only.
+    traj_info = {
+        "exit_status": "submitted",
+        "submission": "diff --git a/x.py b/x.py\n+rate-retry\n",
+        "model_stats": {"tokens_sent": 1, "tokens_received": 1, "api_calls": 1},
+    }
+    fake = tmp_path / "fake_sweagent_rl.py"
+    fake.write_text(
+        "import json, sys, pathlib, os\n"
+        f"cf = pathlib.Path({str(counter_file)!r})\n"
+        "n = int(cf.read_text()); cf.write_text(str(n + 1))\n"
+        "if n == 0:\n"
+        "    sys.stderr.write('RateLimitError: 429 Too Many Requests')\n"
+        "    sys.exit(1)\n"
+        + _fake_sweagent_source("demo__rl", traj_info)
+    )
+    monkeypatch.setenv("SWEAGENT_BINARY", f"{sys.executable} {fake}")
+    monkeypatch.setenv("BENCH_RATE_LIMIT_SLEEP", "0")  # skip real sleep in tests
+
+    from bench.sweagent_runner import run_arm
+
+    task = _make_task("demo__rl")
+    out_dir = tmp_path / "out-rl"
+
+    res = run_arm(
+        arm="raw",
+        task=task,
+        model="minimax/minimax-m2.7",
+        workspace=tmp_path / "work",
+        output_dir=out_dir,
+    )
+
+    assert res.patch.startswith("diff"), f"unexpected patch: {res.patch!r}"
+    assert int(counter_file.read_text()) == 2, "expected exactly 2 sweagent invocations"
