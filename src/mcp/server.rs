@@ -135,6 +135,9 @@ free-text search across files.",
     ) -> Result<Json<SearchResponse>, CallToolResult> {
         let graph = Arc::clone(&self.graph);
         let project_root = self.project_root.clone();
+        // A second clone is needed: the first is moved into spawn_blocking,
+        // the second is used after `.await` to relativize hit paths.
+        let project_root_render = project_root.clone();
         let hits = tokio::task::spawn_blocking(move || {
             let g = graph.lock().expect("graph lock poisoned");
             dispatch(&g, &project_root, &req.query)
@@ -147,13 +150,7 @@ free-text search across files.",
         })?;
         let lines: Vec<String> = hits
             .iter()
-            .map(|h| match (&h.signature, &h.snippet) {
-                (Some(sig), _) => format!("{}:{} \u{2014} {}", h.file.display(), h.line, sig),
-                (None, Some(snip)) => {
-                    format!("{}:{} \u{2014} {}", h.file.display(), h.line, snip.trim())
-                }
-                (None, None) => format!("{}:{}", h.file.display(), h.line),
-            })
+            .map(|h| h.to_compact_line(&project_root_render))
             .collect();
         Ok(Json(SearchResponse { hits: lines }))
     }

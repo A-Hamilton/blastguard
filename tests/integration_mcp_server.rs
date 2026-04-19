@@ -32,3 +32,17 @@ async fn server_boots_on_duplex_transport_without_panicking() {
     // semantics vary.
     let _ = handle.await;
 }
+
+#[tokio::test]
+#[ignore = "TODO: requires a JSON-RPC client fixture; round-6 micro-bench is the real gate (plan 13 task 2 step 3)"]
+async fn search_response_uses_compact_format() {
+    // Spin up a minimal in-process MCP server against a small fixture project
+    // that has a known symbol. Send a tools/call for search. Assert the
+    // response JSON contains relative paths (no "/home/") and doesn't include
+    // lifetime syntax ('a, 'g).
+    //
+    // Implementation deferred — the unit tests in src/search/hit.rs::tests_compact
+    // cover to_compact_line in isolation, and the live binary smoke-check in the
+    // plan's Step 4 verifies end-to-end correctness before the round-6 bench.
+    todo!("implement when JSON-RPC client fixture is available")
+}
