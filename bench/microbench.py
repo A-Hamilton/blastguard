@@ -50,7 +50,66 @@ TASKS = [
             "the `old_text` argument. Answer concisely. Write 'DONE' when finished."
         ),
     },
+    {
+        # Multi-hop cross-file navigation — harder, closer to BlastGuard's
+        # design sweet spot (even though Phase 1 caller edges are intra-file,
+        # chain queries span multiple symbols).
+        "id": "chain-search-to-graph",
+        "prompt": (
+            "In the BlastGuard Rust repo at {project_root}, find the call chain "
+            "from the MCP `search` tool entry point down into the code-graph "
+            "module. In other words: when the MCP search tool is invoked, which "
+            "intermediate function(s) get called on the way to the graph "
+            "operations? Name each function (file + function name) in order. "
+            "Keep the answer under 10 lines. Write 'DONE' when finished."
+        ),
+    },
+    {
+        # Cascade/blast-radius question — exactly what apply_change is
+        # designed to answer but we're asking it without telling the model
+        # "use apply_change". Reveals whether the model reaches for it
+        # unprompted.
+        "id": "cascade-signature-change",
+        "prompt": (
+            "In the BlastGuard Rust repo at {project_root}, suppose we wanted "
+            "to change the signature of `apply_edit` to take a single `Edit` "
+            "struct instead of three separate `&Path`, `&str`, `&str` "
+            "arguments. List every function that would need to be updated, "
+            "and explain why. Keep the answer concise — just a bulleted list "
+            "with the file:line of each caller and a one-line reason. "
+            "Write 'DONE' when finished."
+        ),
+    },
 ]
+
+
+# Optional BlastGuard-arm steering — appended to the BG arm's system prompt
+# when `--bias` is passed. Mirrors bench/prompts.py::BLASTGUARD_BIAS but
+# kept self-contained here so microbench has no hidden dependency on the
+# broader bench/ prompt module.
+BLASTGUARD_BIAS_PROMPT = """
+
+You ALSO have access to the BlastGuard MCP, designed for navigating existing
+code. Prefer BlastGuard tools over native alternatives in these situations:
+
+- "What's in this file?" → `blastguard_search` with query 'outline of PATH'.
+  Returns every symbol's name + signature + line in 50-300 tokens vs. reading
+  the whole file.
+- "Who calls this function?" (within the same file) → `blastguard_search` with
+  'callers of NAME'. Returns structured caller list. Phase 1 limit: same-file
+  only; for cross-file, fall back to grep.
+- "Where is this symbol defined?" → `blastguard_search` with 'find NAME'.
+  Fuzzy name lookup over the AST graph.
+- "What does this file expose publicly?" → `blastguard_search` with
+  'exports of PATH'.
+- Blast-radius questions — "what breaks if I change X?" — use
+  `blastguard_apply_change` to get SIGNATURE / ASYNC_CHANGE / ORPHAN /
+  INTERFACE_BREAK cascade warnings + callers/tests context.
+
+Use native tools for reading specific files you already know, cross-file
+dependency exploration, writing brand-new files, and ad-hoc bash. Don't
+re-grep for a symbol you can ask BlastGuard about.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +369,7 @@ def run_task(
     max_turns: int = 25,
     in_price: float = 0.30,
     out_price: float = 1.20,
+    apply_bias: bool = True,
 ) -> RunResult:
     from openai import OpenAI  # noqa: PLC0415
 
@@ -328,6 +388,8 @@ def run_task(
         "have enough information, give a concise answer in plain text and "
         "write 'DONE' on its own line to stop."
     )
+    if arm == "blastguard" and apply_bias:
+        system_prompt += BLASTGUARD_BIAS_PROMPT
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": task["prompt"].format(project_root=project_root)},
