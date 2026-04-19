@@ -21,9 +21,10 @@ bench/.env.*
 !bench/.env.example
 
 # Benchmark harness
-bench/results/*.jsonl
+bench/results/
 bench/.venv/
 bench/__pycache__/
 bench/**/__pycache__/
 bench/.pytest_cache/
 bench/.evaluator/
+bench/.sweagent-repo/

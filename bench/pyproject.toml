@@ -12,6 +12,13 @@ dependencies = [
     "click>=8.1",
     "rich>=13.7",
     "scipy>=1.14",
+    # SWE-agent v1.1.0 from git (PyPI stub 0.0.1 is unusable).
+    # After uv sync, run bench/scripts/clone_sweagent.sh to fetch the required
+    # config/ + tools/ + trajectories/ dirs into bench/.sweagent-repo, then set:
+    #   SWE_AGENT_CONFIG_DIR=bench/.sweagent-repo/config
+    #   SWE_AGENT_TOOLS_DIR=bench/.sweagent-repo/tools
+    #   SWE_AGENT_TRAJECTORY_DIR=bench/.sweagent-repo/trajectories
+    "sweagent",
 ]
 
 [dependency-groups]
@@ -23,6 +30,9 @@ dev = [
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+sweagent = { git = "https://github.com/SWE-agent/SWE-agent.git", rev = "v1.1.0" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
