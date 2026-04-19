@@ -840,7 +840,7 @@ git commit -m "bench: SWE-agent per-arm orchestrator + shared TokenCount"
 **Files:**
 - Modify: `bench/runner.py`
 
-- [ ] **Step 1: Replace runner.py**
+- [x] **Step 1: Replace runner.py**
 
 Overwrite `bench/runner.py` with:
 
@@ -994,7 +994,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 2: Dry-run smoke**
+- [x] **Step 2: Dry-run smoke**
 
 ```bash
 cd /home/adam/Documents/blastguard
@@ -1005,7 +1005,7 @@ bench/.venv/bin/python -m bench.runner \
 
 Expected: exit 0, `bench/results/dry/config.json` emitted, empty telemetry.jsonl and patches.json (array `[]`). No SWE-agent invoked because `--limit 0`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add bench/runner.py
