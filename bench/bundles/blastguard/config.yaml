@@ -12,35 +12,21 @@ tools:
     signature: |
       blastguard_search <json_query>
     docstring: >
-      AST-graph query over the project. json_query is a single-quoted JSON
-      string with a 'query' key. Phase 1 supports four query types reliably:
-      '{{"query": "outline of PATH"}}' returns every symbol (name + signature +
-      line) in a file — use this instead of reading a whole file to understand
-      its shape. '{{"query": "find NAME"}}' returns the file:line where a
-      symbol is defined. '{{"query": "exports of PATH"}}' returns only
-      visibility-filtered public symbols. '{{"query": "libraries"}}' lists
-      external + internal packages the project imports. Best for a first
-      pass on a new file. NOTE: callers-of and chain-of-calls queries are
-      intra-file only in Phase 1 — for cross-file dependency work, prefer
-      grep directly.
+      Query AST code graph. query values (Phase 1): 'outline of PATH',
+      'find NAME', 'callers of NAME' (same-file only), 'exports of PATH',
+      'libraries'. For cross-file dependency work, prefer grep.
     arguments:
       - name: json_query
         type: string
-        description: "Single-quoted JSON string with a 'query' key."
+        description: "Single-quoted JSON with a 'query' key."
         required: true
 
   blastguard_apply_change:
     signature: |
       blastguard_apply_change <json_changes>
     docstring: >
-      Apply edits to a file with in-file cascade-warning analysis. json_changes
-      is a single-quoted JSON string like '{{"file": "path", "changes":
-      [{{"old_text": "...", "new_text": "..."}}]}}'. Returns SIGNATURE /
-      ASYNC_CHANGE / ORPHAN / INTERFACE_BREAK warnings for same-file callers
-      plus their signatures. Use this over str_replace_editor when editing
-      a function signature or removing a public symbol — the cascade warnings
-      flag same-file blast radius immediately. For cross-file blast radius,
-      follow up with grep.
+      Apply edits to a file with same-file cascade warnings
+      (SIGNATURE / ASYNC_CHANGE / ORPHAN / INTERFACE_BREAK).
     arguments:
       - name: json_changes
         type: string
@@ -51,11 +37,8 @@ tools:
     signature: |
       blastguard_run_tests <json_opts>
     docstring: >
-      Run the project's test suite (auto-detects pytest/jest/cargo).
-      json_opts is a single-quoted JSON string like '{{"path":
-      "optional/subpath"}}' or '{{}}' for the default. Failures are annotated
-      with "YOU MODIFIED X" when a stack frame hits a recently-edited symbol
-      — use after apply_change to verify the cascade didn't break tests.
+      Run tests (auto-detects pytest/jest/cargo). Failures are annotated
+      with "YOU MODIFIED X" for recently-edited symbols.
     arguments:
       - name: json_opts
         type: string

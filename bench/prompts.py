@@ -62,6 +62,20 @@ IMPORTANT — EFFICIENCY RULES:
    you're done — write the answer and submit.
 4. Every extra turn costs tokens on ALL prior context. A 4-turn solve
    is ~50% cheaper than a 6-turn solve. Aim for fewest turns.
+
+STEP-TYPE CLASSIFICATION (before EVERY tool call):
+
+Classify each step as reflexive or deliberative:
+- REFLEXIVE: the answer is already in the conversation context — a prior
+  tool result already contains what you need. DO NOT call a tool. Write
+  the answer directly.
+- DELIBERATIVE: you need information you genuinely do not have yet. Call
+  a tool.
+
+Before any tool call, state `step: deliberative — need X because Y` in
+one short line. If the step is reflexive, skip the tool call entirely
+and go straight to the answer. This classification is the single
+biggest defense against redundant tool chains.
 """
 
 # Legacy constants kept for backward compatibility with the old runner.
