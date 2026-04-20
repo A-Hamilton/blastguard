@@ -296,7 +296,30 @@ fn emit_simple(
         return;
     }
     let body_text = node.utf8_text(src_bytes).unwrap_or("");
-    let signature = name.clone();
+
+    // method_definition nodes carry the same `parameters` / `return_type`
+    // fields that function_declaration does. Extract them when present
+    // so `outline of FILE` surfaces `add(item: string) -> void` instead
+    // of bare `add`. Class / Interface / TypeAlias nodes have no
+    // parameters field and fall through to the bare-name path.
+    let params_text = node
+        .child_by_field_name("parameters")
+        .map(|n| n.utf8_text(src_bytes).unwrap_or("").to_owned())
+        .unwrap_or_default();
+    let return_type = node.child_by_field_name("return_type").map(|n| {
+        n.utf8_text(src_bytes)
+            .unwrap_or("")
+            .trim_start_matches(':')
+            .trim()
+            .to_owned()
+    });
+    let signature = if params_text.is_empty() && return_type.is_none() {
+        name.clone()
+    } else {
+        render_signature(&name, &params_text, return_type.as_deref())
+    };
+    let is_async = kind == SymbolKind::Method && first_child_text_is(node, source, "async");
+
     let line_start = u32::try_from(node.start_position().row)
         .unwrap_or(u32::MAX)
         .saturating_add(1);
@@ -313,11 +336,11 @@ fn emit_simple(
         line_start,
         line_end,
         signature,
-        params: Vec::new(),
-        return_type: None,
+        params: split_params(&params_text),
+        return_type,
         visibility: Visibility::Export,
         body_hash: body_hash(body_text),
-        is_async: false,
+        is_async,
         embedding_id: None,
     });
 }
