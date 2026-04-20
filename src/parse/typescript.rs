@@ -113,6 +113,7 @@ fn extract_with(
                 let node = capture.node;
                 match capture_name {
                     "function.decl" => emit_function(node, source, path, &mut out),
+                    "fn_arrow.decl" => emit_arrow_const(node, source, path, &mut out),
                     "class.decl" => emit_simple(node, source, path, &mut out, SymbolKind::Class),
                     "method.decl" => emit_simple(node, source, path, &mut out, SymbolKind::Method),
                     "interface.decl" => {
@@ -189,6 +190,89 @@ fn emit_function(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &m
         params: split_params(&params_text),
         return_type,
         // Visibility refinement (export vs public vs private) is Task 2.
+        visibility: Visibility::Export,
+        body_hash: body_hash(body_text),
+        is_async,
+        embedding_id: None,
+    });
+}
+
+/// Emit a function symbol for `const Foo = (x) => ...` and friends.
+///
+/// `node` is a `lexical_declaration` or `variable_declaration` containing
+/// a single `variable_declarator` whose `value` is an arrow or function
+/// expression. We drill down to extract the binding name, the inner
+/// expression's params, return-type annotation, and async-ness.
+fn emit_arrow_const(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+    path: &Path,
+    out: &mut ParseOutput,
+) {
+    let src_bytes = source.as_bytes();
+
+    // lexical_declaration → variable_declarator (may have multiple; take
+    // the first — covers `const foo = () => 1` and skips the less-common
+    // `const foo = () => 1, bar = () => 2`).
+    let mut cursor = node.walk();
+    let Some(declarator) = node
+        .children(&mut cursor)
+        .find(|c| c.kind() == "variable_declarator")
+    else {
+        return;
+    };
+    let Some(name_node) = declarator.child_by_field_name("name") else {
+        return;
+    };
+    let name = name_node.utf8_text(src_bytes).unwrap_or("").to_owned();
+    if name.is_empty() {
+        return;
+    }
+    let Some(value_node) = declarator.child_by_field_name("value") else {
+        return;
+    };
+
+    // Async detection — scan the inner expression's direct children for
+    // an `async` keyword token.
+    let is_async = first_child_text_is(value_node, source, "async");
+    let kind = if is_async {
+        SymbolKind::AsyncFunction
+    } else {
+        SymbolKind::Function
+    };
+
+    let params_text = value_node
+        .child_by_field_name("parameters")
+        .map(|n| n.utf8_text(src_bytes).unwrap_or("").to_owned())
+        .unwrap_or_default();
+    let return_type = value_node.child_by_field_name("return_type").map(|n| {
+        n.utf8_text(src_bytes)
+            .unwrap_or("")
+            .trim_start_matches(':')
+            .trim()
+            .to_owned()
+    });
+
+    let signature = render_signature(&name, &params_text, return_type.as_deref());
+    let body_text = node.utf8_text(src_bytes).unwrap_or("");
+    let line_start = u32::try_from(node.start_position().row)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let line_end = u32::try_from(node.end_position().row)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+
+    out.symbols.push(Symbol {
+        id: SymbolId {
+            file: path.to_path_buf(),
+            name,
+            kind,
+        },
+        line_start,
+        line_end,
+        signature,
+        params: split_params(&params_text),
+        return_type,
         visibility: Visibility::Export,
         body_hash: body_hash(body_text),
         is_async,
@@ -688,6 +772,32 @@ export function good() { return 1; }
 this is { not valid :: syntax
 export function alsoGood() { return 2; }
 ";
+
+    #[test]
+    fn extracts_arrow_function_const_as_function() {
+        let src = "\
+export const helper = (x: number): number => x * 2;
+export const Button = () => { return 1; };
+export const load = async (): Promise<string> => 'ok';
+";
+        let out = extract(&PathBuf::from("src/a.ts"), src);
+        let names: Vec<_> = out.symbols.iter().map(|s| s.id.name.as_str()).collect();
+        assert!(names.contains(&"helper"), "missing helper: {names:?}");
+        assert!(names.contains(&"Button"), "missing Button: {names:?}");
+        assert!(names.contains(&"load"), "missing load: {names:?}");
+
+        let load_sym = out.symbols.iter().find(|s| s.id.name == "load").unwrap();
+        assert_eq!(
+            load_sym.id.kind,
+            SymbolKind::AsyncFunction,
+            "async arrow should be AsyncFunction, got {:?}",
+            load_sym.id.kind
+        );
+        assert!(load_sym.is_async);
+
+        let helper_sym = out.symbols.iter().find(|s| s.id.name == "helper").unwrap();
+        assert_eq!(helper_sym.return_type.as_deref(), Some("number"));
+    }
 
     #[test]
     fn tsx_parses_jsx_and_captures_component_as_call() {

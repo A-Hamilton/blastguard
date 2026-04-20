@@ -87,6 +87,7 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
                 let node = capture.node;
                 match capture_name {
                     "function.decl" => emit_function(node, source, path, &mut out),
+                    "fn_arrow.decl" => emit_arrow_const(node, source, path, &mut out),
                     "class.decl" => emit_simple(node, source, path, &mut out, SymbolKind::Class),
                     "method.decl" => emit_simple(node, source, path, &mut out, SymbolKind::Method),
                     "import.source" => {
@@ -150,6 +151,72 @@ fn emit_function(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &m
         params: split_params(&params_text),
         return_type: None,
         // Visibility refinement (export vs public vs private) is Task 2.
+        visibility: Visibility::Export,
+        body_hash: body_hash(body_text),
+        is_async,
+        embedding_id: None,
+    });
+}
+
+/// Emit a function symbol for `const Foo = (x) => ...` / `const Foo =
+/// function() {...}`. Mirrors the TS driver's `emit_arrow_const`.
+fn emit_arrow_const(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+    path: &Path,
+    out: &mut ParseOutput,
+) {
+    let src_bytes = source.as_bytes();
+    let mut cursor = node.walk();
+    let Some(declarator) = node
+        .children(&mut cursor)
+        .find(|c| c.kind() == "variable_declarator")
+    else {
+        return;
+    };
+    let Some(name_node) = declarator.child_by_field_name("name") else {
+        return;
+    };
+    let name = name_node.utf8_text(src_bytes).unwrap_or("").to_owned();
+    if name.is_empty() {
+        return;
+    }
+    let Some(value_node) = declarator.child_by_field_name("value") else {
+        return;
+    };
+
+    let is_async = first_child_text_is(value_node, source, "async");
+    let kind = if is_async {
+        SymbolKind::AsyncFunction
+    } else {
+        SymbolKind::Function
+    };
+
+    let params_text = value_node
+        .child_by_field_name("parameters")
+        .map(|n| n.utf8_text(src_bytes).unwrap_or("").to_owned())
+        .unwrap_or_default();
+
+    let signature = render_signature(&name, &params_text, None);
+    let body_text = node.utf8_text(src_bytes).unwrap_or("");
+    let line_start = u32::try_from(node.start_position().row)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let line_end = u32::try_from(node.end_position().row)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+
+    out.symbols.push(Symbol {
+        id: SymbolId {
+            file: path.to_path_buf(),
+            name,
+            kind,
+        },
+        line_start,
+        line_end,
+        signature,
+        params: split_params(&params_text),
+        return_type: None,
         visibility: Visibility::Export,
         body_hash: body_hash(body_text),
         is_async,
