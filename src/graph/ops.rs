@@ -3,7 +3,7 @@
 //! Phase 1.1 lands the BFS primitives used by every `search` dispatcher
 //! pattern (SPEC §3.1) and by cascade impact analysis (SPEC §5).
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::graph::types::{CodeGraph, SymbolId};
 
@@ -44,8 +44,7 @@ where
     }
     let mut queue: VecDeque<SymbolId> = VecDeque::new();
     let mut visited: HashSet<SymbolId> = HashSet::new();
-    let mut parent: std::collections::HashMap<SymbolId, SymbolId> =
-        std::collections::HashMap::new();
+    let mut parent: HashMap<SymbolId, SymbolId> = HashMap::new();
     queue.push_back(from.clone());
     visited.insert(from.clone());
 
@@ -237,5 +236,15 @@ mod tests {
         g.insert_symbol(b.clone());
         connect(&mut g, &a, &b);
         assert!(shortest_path_to_predicate(&g, &a.id, |_| false).is_none());
+    }
+
+    #[test]
+    fn shortest_path_to_predicate_short_circuits_when_from_matches() {
+        let mut g = CodeGraph::new();
+        let a = mk("a", "x.ts");
+        g.insert_symbol(a.clone());
+        let path = shortest_path_to_predicate(&g, &a.id, |id| id == &a.id)
+            .expect("from matches predicate");
+        assert_eq!(path, vec![a.id.clone()]);
     }
 }
