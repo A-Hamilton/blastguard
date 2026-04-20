@@ -876,6 +876,41 @@ export function Page() {
     }
 
     #[test]
+    fn tsx_captures_namespaced_jsx_components_as_calls() {
+        use crate::graph::types::EdgeKind;
+        // `<Radix.Button>` and `<UI.Card />` — member-expression JSX
+        // names common in Radix, Chakra, Headless UI, etc. The tail
+        // identifier is the captured callee.
+        let tsx = "\
+import * as Radix from 'radix-ui';
+import * as UI from './ui';
+export function App() {
+    return (
+        <div>
+            <Radix.Button>x</Radix.Button>
+            <UI.Card>y</UI.Card>
+        </div>
+    );
+}
+";
+        let out = extract(&PathBuf::from("src/App.tsx"), tsx);
+        let callee_names: Vec<_> = out
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls && e.from.name == "App")
+            .map(|e| e.to.name.as_str())
+            .collect();
+        assert!(
+            callee_names.contains(&"Button"),
+            "missing Button from namespaced JSX: {callee_names:?}"
+        );
+        assert!(
+            callee_names.contains(&"Card"),
+            "missing Card from namespaced JSX: {callee_names:?}"
+        );
+    }
+
+    #[test]
     fn partial_parse_still_extracts_what_parsed() {
         let out = extract(&PathBuf::from("src/broken.ts"), BROKEN_TS);
         assert!(

@@ -13,3 +13,19 @@
 (jsx_self_closing_element
   name: (identifier) @call.callee
   (#match? @call.callee "^[A-Z]")) @call.site
+
+; Namespaced JSX components — `<Radix.Button>`, `<UI.Card>`, or
+; nested `<Radix.Dialog.Root>`. tree-sitter parses the name as a
+; `member_expression` chain whose rightmost `property` is the
+; component name. Capture only the tail — that's what the agent
+; needs to grep for, and it aligns with how ordinary call
+; expressions capture the final segment of `obj.method()`.
+(jsx_opening_element
+  name: (member_expression
+    property: (property_identifier) @call.callee)
+  (#match? @call.callee "^[A-Z]")) @call.site
+
+(jsx_self_closing_element
+  name: (member_expression
+    property: (property_identifier) @call.callee)
+  (#match? @call.callee "^[A-Z]")) @call.site
