@@ -491,6 +491,7 @@ fn library_matches_spec(library: &str, spec: &str) -> bool {
 ///
 /// Must run AFTER [`resolve_imports`] because it relies on `Imports` edges
 /// having real file paths and `Confidence::Certain`.
+#[allow(clippy::too_many_lines)]
 pub fn resolve_calls(graph: &mut CodeGraph) {
     type Rewrite = (SymbolId, usize, PathBuf, crate::graph::types::SymbolKind);
 
@@ -536,9 +537,24 @@ pub fn resolve_calls(graph: &mut CodeGraph) {
             let target_name = &edge.to.name;
 
             // Intra-file: if to.file declares a symbol with this name, the
-            // parser's placeholder is actually correct — leave it.
+            // parser's placeholder is right about the file/name — but the
+            // kind is a placeholder Function that must be corrected against
+            // the declaration's actual kind (Method, AsyncFunction, Class,
+            // ...). Without this correction, `callers(graph, method_id)`
+            // returns empty because reverse_edges is keyed on the
+            // placeholder kind, not the declaration's kind.
             if let Some(names) = file_names.get(&edge.to.file) {
-                if names.iter().any(|(n, _)| n == target_name) {
+                if let Some((_, actual_kind)) =
+                    names.iter().find(|(n, _)| n == target_name)
+                {
+                    if *actual_kind != edge.to.kind {
+                        rewrites.push((
+                            from_id.clone(),
+                            idx,
+                            edge.to.file.clone(),
+                            *actual_kind,
+                        ));
+                    }
                     continue;
                 }
             }
