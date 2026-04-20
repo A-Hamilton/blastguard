@@ -529,6 +529,21 @@ def main() -> int:
         help="Comma-separated list of task IDs to run (e.g. 'chain-search-to-graph'). "
              "Defaults to all tasks in tasks_registry.py.",
     )
+    p.add_argument(
+        "--run-judge",
+        action="store_true",
+        help="After rollouts complete, run bench/microbench_judge.py on each "
+             "same-(task, seed) raw/bg pair. Priority 1b quality ranking — "
+             "writes a companion .judge.jsonl next to --output.",
+    )
+    p.add_argument(
+        "--judge-n",
+        type=int,
+        default=3,
+        help="Number of blind-judge calls per pair (default 3). Majority "
+             "vote across calls is the verdict. Extra calls reduce flakiness "
+             "at the cost of ~1 Gemma call each.",
+    )
     args = p.parse_args()
 
     if args.tasks is None:
@@ -590,6 +605,84 @@ def main() -> int:
             f"{r.task_id:<24} {r.arm:<12} {r.turns:>5} {r.input_tokens:>8} "
             f"{r.output_tokens:>7} ${r.total_cost_usd:>6.4f} {r.wall_seconds:>5.1f}s"
         )
+
+    # Priority 1a — deterministic correctness grading.
+    from bench.microbench_grader import (  # noqa: PLC0415
+        correctness_rate_by_cell,
+        grade_rollouts,
+        regression_verdict,
+    )
+    run_dicts = [asdict(r) for r in results]
+    graded = grade_rollouts(run_dicts, selected_tasks)
+    cells = correctness_rate_by_cell(graded)
+    if cells:
+        print("\n=== QUALITY (Priority 1a — substring grader) ===")
+        for (task_id, arm), c in sorted(cells.items()):
+            print(
+                f"  {task_id:<24} {arm:<12} {c['correct']}/{c['n']} "
+                f"({c['correct_rate']:.0%})"
+            )
+        verdict, reasons = regression_verdict(cells)
+        print(f"\nVERDICT: {verdict}")
+        for line in reasons:
+            print(f"  {line}")
+
+    # Priority 1b — LLM-as-judge pairwise ranking (opt-in).
+    if args.run_judge:
+        from openai import OpenAI  # noqa: PLC0415
+        from bench.microbench_judge import aggregate_verdicts, judge_pair  # noqa: PLC0415
+
+        judge_client = OpenAI(
+            base_url=args.api_base,
+            api_key=os.environ[args.api_key_env],
+            max_retries=5,
+            timeout=600.0,
+        ).chat.completions
+        judge_model = args.model_id_override or args.model
+
+        # Pair up same-(task, seed) rollouts from raw + blastguard arms.
+        by_key: dict[tuple[str, int], dict[str, "RunResult"]] = {}
+        for r in results:
+            by_key.setdefault((r.task_id, r.seed), {})[r.arm] = r
+
+        verdicts = []
+        task_prompts = {t["id"]: t["prompt"] for t in selected_tasks}
+        print(f"\n=== QUALITY (Priority 1b — LLM judge, n={args.judge_n}) ===")
+        for (task_id, seed), arms in sorted(by_key.items()):
+            raw = arms.get("raw")
+            bg = arms.get("blastguard")
+            if raw is None or bg is None:
+                continue
+            v = judge_pair(
+                task_id=task_id,
+                task_prompt=task_prompts.get(task_id, ""),
+                raw_answer=raw.final_answer,
+                blastguard_answer=bg.final_answer,
+                seed=seed,
+                client=judge_client,
+                model=judge_model,
+                n_judges=args.judge_n,
+            )
+            verdicts.append(v)
+            print(
+                f"  {task_id:<24} seed={seed} winner={v.winner:<11} "
+                f"(raw={v.raw_wins} bg={v.bg_wins} ties={v.ties})"
+            )
+
+        if verdicts:
+            agg = aggregate_verdicts(verdicts)
+            print("\nPer-task pairwise:")
+            for task_id, c in sorted(agg.items()):
+                print(
+                    f"  {task_id:<24} BG wins {c['bg_wins']}/{c['n']} "
+                    f"({c['bg_win_rate']:.0%}), raw {c['raw_wins']}, ties {c['ties']}"
+                )
+            judge_path = args.output.with_suffix(".judge.jsonl")
+            with judge_path.open("w", encoding="utf-8") as f:
+                for v in verdicts:
+                    f.write(json.dumps(asdict(v)) + "\n")
+            print(f"\nVerdicts written to {judge_path}")
+
     return 0
 
 
