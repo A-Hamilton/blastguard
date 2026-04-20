@@ -187,6 +187,12 @@ fn handle_event(
         g.insert_edge(edge);
     }
     g.library_imports.extend(parsed.library_imports);
+
+    // Re-resolve and re-stitch so cross-file callers keep working through
+    // incremental updates (same rationale as apply_change's reparse step).
+    crate::parse::resolve::resolve_imports(&mut g, project_root);
+    crate::parse::resolve::resolve_calls(&mut g);
+    g.restitch_reverse_edges_for_file(path);
     tracing::debug!(path = %path.display(), "watcher: reindexed");
 }
 

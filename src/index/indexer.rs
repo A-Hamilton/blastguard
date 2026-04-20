@@ -224,7 +224,14 @@ pub fn warm_start(project_root: &Path) -> Result<CodeGraph> {
         })
         .collect();
 
+    let mut restitch_files: Vec<PathBuf> = Vec::new();
     for out in reparses {
+        // Track which files we re-inserted so we can rebuild their
+        // reverse_edges below — other files' forward edges are kept
+        // dangling by remove_file for ORPHAN detection.
+        if let Some(sym) = out.symbols.first() {
+            restitch_files.push(sym.id.file.clone());
+        }
         for sym in out.symbols {
             graph.insert_symbol(sym);
         }
@@ -239,6 +246,9 @@ pub fn warm_start(project_root: &Path) -> Result<CodeGraph> {
     // keeps resolver logic in one place.
     crate::parse::resolve::resolve_imports(&mut graph, project_root);
     crate::parse::resolve::resolve_calls(&mut graph);
+    for file in &restitch_files {
+        graph.restitch_reverse_edges_for_file(file);
+    }
 
     // Persist the updated cache.
     let mut tree_hashes = HashMap::new();
