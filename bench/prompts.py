@@ -80,19 +80,15 @@ After `DONE`, stop. Do not think aloud. Do not call another tool. The
 harness terminates on the `DONE` line. Hitting the turn budget without
 `DONE` is counted as a failure even if the answer is correct.
 
-STEP-TYPE CLASSIFICATION (before EVERY tool call):
+STEP-TYPE CLASSIFICATION — silent mental check (DO NOT narrate):
 
-Classify each step as reflexive or deliberative:
-- REFLEXIVE: the answer is already in the conversation context — a prior
-  tool result already contains what you need. DO NOT call a tool. Write
-  the answer directly.
-- DELIBERATIVE: you need information you genuinely do not have yet. Call
-  a tool.
-
-Before any tool call, state `step: deliberative — need X because Y` in
-one short line. If the step is reflexive, skip the tool call entirely
-and go straight to the answer. This classification is the single
-biggest defense against redundant tool chains.
+Before reaching for a tool, silently ask: is the answer I need already
+present in my prior context (a previous tool result)? If yes, write
+the final answer — do not call another tool. If no, call the most
+specific tool. Do not emit `step: deliberative` or similar meta-
+narration in your response; that wastes tokens and encourages the
+agent to keep narrating instead of concluding. Just act on the
+classification silently.
 """
 
 # Legacy constants kept for backward compatibility with the old runner.
