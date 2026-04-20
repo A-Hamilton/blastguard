@@ -486,3 +486,190 @@ input was ~9K tokens, so 16K leaves ~2× headroom. Capture on
 **Round 9 re-run pending on llama-swap restart.** No code changes
 blocked by this — the full `--run-judge` pipeline is verified end-
 to-end via round 8's successful single-task run.
+
+## Round 9 — KV-quant + `-c 16384`, 3 tasks × 1 seed × 3 judges
+
+Scope: `chain-search-to-graph`, `outline-tree-sitter-rust`,
+`find-tamper-patterns`. Same bench prompts as round 8. The only
+change between the aborted round-9 attempt and this one is the
+llama-swap config — context dropped to 16384, `-ctk q4_0 -ctv q4_0`
+added. Run: `bench/runs/20260420-172952-round9-3tasks-kvq4.jsonl`.
+
+| task                        | BG vs raw input | BG vs raw wall | judge winner | axes                            |
+|-----------------------------|:---------------:|:--------------:|:------------:|---------------------------------|
+| chain-search-to-graph       | −70%            | −67%           | **raw (3/3)**    | correctness/substance/conciseness |
+| outline-tree-sitter-rust    | −73%            | −70%           | blastguard (2/3) | correctness+substance            |
+| find-tamper-patterns        | +35%            | −69%           | **raw (3/3)**    | correctness+substance            |
+
+### Priority 1a — deterministic grader
+
+All six rollouts pass the substring check. `COMMIT OK` at this layer.
+
+### Priority 1b — LLM-as-judge (raw 2, BG 1)
+
+Two reasons BG lost on the judge axis:
+
+1. **`chain-search-to-graph`** — BG's seed-1 answer was
+   `<|channel>call:bash { "cmd": ... }` fragments: a Gemma
+   thinking-mode template-leakage corruption where the model emits
+   its `<|channel>` control tokens as part of the answer. Judges
+   (correctly) ranked raw's clean prose answer above BG's corrupted
+   output on all three axes. This is not a BlastGuard-tool issue;
+   it's a Gemma-template issue under heavier tool-call traffic.
+2. **`find-tamper-patterns`** — BG listed 5 correct filenames but
+   elided the file path that raw included. Judge rewarded raw for
+   being more "substantive" on that axis.
+
+### Priority 2 — tokens: BG wins 2/3, loses 1
+
+Big wins on chain-search and outline (−70%+ input). `find-tamper`
+regressed +35% input on BG despite both arms reaching the correct
+answer — the BG arm called more tools than needed.
+
+### Priority 3 — wall: BG wins 3/3
+
+KV-quant + smaller context cut all three wall times by 67-70% vs
+raw. The +379% wall regression from round 7 is fully reversed.
+
+### Round 9 takeaways
+
+- KV-quant is required at this VRAM budget. Without it, llama-swap
+  hangs under sustained traffic; with it, we get clean multi-task
+  runs at `-c 16384`.
+- The BG-wins-tokens/raw-wins-judge split surfaces a real quality
+  concern on `find-tamper`: BG's terser palette occasionally drops
+  secondary specificity that the judge weights heavily.
+- Corrupted `<|channel>` output on `chain-search` seed 1 suggests
+  Gemma thinking-mode + aggressive `STOP CONDITION` + BlastGuard
+  tool pressure can trip template leakage. This motivated the
+  round-10 prompt revision (silent mental classification).
+
+## Round 10 — silent STEP-TYPE classification, same 3 tasks
+
+Scope: same as round 9, single prompt change. `BLASTGUARD_BIAS`
+previously asked the agent to "label each step `step: deliberative`
+before acting"; round-10 made that rule a **silent mental check**
+to block the infinite meta-narration failure mode observed in an
+unlogged pilot. Commit: `155d5d4`. Run:
+`bench/runs/20260420-174225-round10-silent-step.jsonl`.
+
+| task                        | BG vs raw input | BG vs raw wall | judge winner | notes                             |
+|-----------------------------|:---------------:|:--------------:|:------------:|-----------------------------------|
+| chain-search-to-graph       | **+83%**        | +30%           | tie (1-1-1)  | BG 21 turns, never emitted hop 3  |
+| outline-tree-sitter-rust    | −73%            | −27%           | blastguard (3/0) | clean win, all axes               |
+| find-tamper-patterns        | −26%            | −70%           | raw (3/0)    | BG dropped file-path detail       |
+
+### What the silent-classification change fixed
+
+The infinite `step: deliberative — I need to…` loop is gone — no
+rollout exhibits meta-narration this round.
+
+### What it didn't fix
+
+- **`chain-search-to-graph` regressed on cost AND completeness.**
+  The BG agent took 21 turns, called BlastGuard 10+ times, and
+  emitted DONE at hop 2. Judge split 1-1-1 — not a clean win for
+  raw, but not a BG win either.
+- **`find-tamper-patterns` judge flipped to raw 3/0** despite BG
+  improving on tokens and wall. Again the substance-axis penalty
+  for dropping secondary detail.
+
+### Round 10 takeaways
+
+- Silent STEP-TYPE is a strict improvement on round 9 for the
+  meta-narration failure mode.
+- The persistent `chain-search` failure is not prompt-fixable by
+  removing narration — the agent is doing real (but poorly
+  directed) work. This pointed to two candidate fixes for round 11:
+  (a) explicitly advertise `chain from A to B` in the palette,
+  (b) remove the answer-length cap so the agent is not incentivised
+  to truncate mid-chain.
+
+## Round 11 — `chain from A to B` advertisement + full-length answers
+
+Scope: same 3 tasks × 1 seed × 3 judges. Two prompt changes atop
+round 10:
+
+1. Added `chain from A to B` as a dedicated cheat-sheet entry in
+   `BLASTGUARD_BIAS`.
+2. Replaced the STOP CONDITION's "3-5 sentences max" rule with
+   "as complete as the question requires."
+
+Run: `bench/runs/20260420-175529-round11-chain-plus-fulllen.jsonl`.
+
+| task                        | BG vs raw input | BG vs raw wall | Priority 1a grader | Priority 1b judge |
+|-----------------------------|:---------------:|:--------------:|:------------------:|:-----------------:|
+| chain-search-to-graph       | +62%            | −29%           | **raw ✅ / BG ❌** | **blastguard (2/1)** |
+| outline-tree-sitter-rust    | −85%            | −73%           | raw ❌ / BG ✅     | blastguard (3/0) |
+| find-tamper-patterns        | +132%           | +24%           | both ✅            | tie (0-0-3)      |
+
+### The split-verdict that defines round 11
+
+`chain-search-to-graph` produces the cleanest example yet of
+Priority 1a and Priority 1b disagreeing:
+
+- **raw** emitted all three hops but named the third as
+  `"structural.rs:[various functions such as find, callers_of,
+  etc.]"` — a placeholder list, not a specific function.
+- **BG** emitted two hops and stopped: `server.rs:search_tool →
+  dispatcher::dispatch → DONE`.
+
+The substring grader passes raw (it contains `structural`) and
+fails BG (it does not). The LLM-judge splits 2-1 for BG because
+two of three judges penalise raw's placeholder more than BG's
+missing-hop. Judge 2 (which voted raw) was correct on substance:
+BG is 2/3 of the answer. Judges 0 and 1 (which voted BG) are also
+defensible — "name each function" was literally violated by raw's
+list.
+
+**Per the user-stated P1 ("quality first"): this is not a BG win
+on chain-search-to-graph.** The judge outcome masks the hard fact
+that BG under-answered.
+
+### Round 11 aggregate
+
+- Priority 1a: 1 BG win / 1 raw win / 1 tie
+- Priority 1b: 2 BG wins / 0 raw wins / 1 tie
+- Priority 2 (input tokens): 1 BG big win / 2 BG regressions
+- Priority 3 (wall): 2 BG wins / 1 BG regression
+
+### The three-round failure-mode pattern
+
+| Round | Change                                       | chain-search failure mode |
+|:-----:|----------------------------------------------|---------------------------|
+| 9     | baseline                                     | `<|channel>` template leak |
+| 10    | silent STEP-TYPE classification              | 21 turns, DONE at hop 2   |
+| 11    | `chain from A to B` hint + full-length answer | 20 turns, DONE at hop 2   |
+
+Three iterations, three different failure modes, chain-search
+never lands all three hops on BG. The diminishing returns suggest
+the root cause is not in the prompt — Gemma 4 26B A4B Q4_K_M is a
+weak-enough reasoner that over a large tool-call palette it
+fails to complete a 3-hop walk even when the palette explicitly
+advertises a single-call solution.
+
+### What round 11 does NOT establish
+
+- Whether a stronger model (Opus 4.7, Sonnet 4.6, GLM-5.1) would
+  exhibit the same 2/3-hops pattern. If not, the problem is
+  Gemma-specific and the prompt is fine.
+- Whether a tool-level fix — making `chain from A to B` walk
+  deeper through re-exports and module boundaries so one call
+  returns all hops — would flip chain-search to a BG win. This is
+  the more interesting experiment and is in scope for this repo.
+
+### Recommended next steps (not taken this session)
+
+1. **Prompt iteration: STOP.** Three rounds haven't fixed
+   chain-search. Accept mixed pattern. Further prompt tweaks are
+   likely p-hacking at n=1 seed.
+2. **Tool-level fix on `chain from A to B`:** walk through
+   re-exports and module boundaries, return the full path in a
+   single response. Re-measure round-11's three tasks with no
+   prompt changes — if chain-search flips to BG-wins, the problem
+   was always in the tool.
+3. **Cloud-model validation round:** re-run rounds 9-11 task mix
+   on Sonnet 4.6 or Opus 4.7 via OpenRouter. A clean BG win on
+   chain-search there would confirm the Gemma-reasoner hypothesis.
+
+Spend across rounds 9-11: ~$0 (fully local, Gemma 4 on llama-swap).
