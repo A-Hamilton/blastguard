@@ -190,9 +190,10 @@ impl CodeGraph {
 
         for edge in to_restitch {
             let rev = self.reverse_edges.entry(edge.to.clone()).or_default();
-            if !rev.iter().any(|e| {
-                e.from == edge.from && e.kind == edge.kind && e.line == edge.line
-            }) {
+            if !rev
+                .iter()
+                .any(|e| e.from == edge.from && e.kind == edge.kind && e.line == edge.line)
+            {
                 let to_key = edge.to.clone();
                 rev.push(edge);
                 *self.centrality.entry(to_key).or_insert(0) += 1;

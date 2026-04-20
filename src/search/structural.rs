@@ -1103,8 +1103,8 @@ mod tests {
         let mut g = CodeGraph::new();
         for (lib, file) in [
             ("tokio", "src/a.rs"),
-            ("bench", "bench/x.py"),    // internal subdir → filtered
-            ("myproj", "tests/t.rs"),   // own crate name → filtered
+            ("bench", "bench/x.py"),  // internal subdir → filtered
+            ("myproj", "tests/t.rs"), // own crate name → filtered
             ("anyhow", "src/b.rs"),
         ] {
             g.library_imports.push(LibraryImport {
@@ -1117,7 +1117,11 @@ mod tests {
         let hits = libraries(&g, tmp.path());
         let names: Vec<_> = hits
             .iter()
-            .filter_map(|h| h.signature.as_deref().and_then(|s| s.split_whitespace().next()))
+            .filter_map(|h| {
+                h.signature
+                    .as_deref()
+                    .and_then(|s| s.split_whitespace().next())
+            })
             .collect();
         assert_eq!(names, vec!["anyhow", "tokio"], "got: {names:?}");
     }

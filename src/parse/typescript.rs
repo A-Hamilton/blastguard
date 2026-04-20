@@ -203,12 +203,7 @@ fn emit_function(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &m
 /// a single `variable_declarator` whose `value` is an arrow or function
 /// expression. We drill down to extract the binding name, the inner
 /// expression's params, return-type annotation, and async-ness.
-fn emit_arrow_const(
-    node: tree_sitter::Node<'_>,
-    source: &str,
-    path: &Path,
-    out: &mut ParseOutput,
-) {
+fn emit_arrow_const(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &mut ParseOutput) {
     let src_bytes = source.as_bytes();
 
     // lexical_declaration → variable_declarator (may have multiple; take
@@ -840,9 +835,10 @@ export function App() {
         // JSX element `<Button .../>` inside App() emits a Calls edge
         // with callee=Button. HTML intrinsics would be filtered by the
         // `^[A-Z]` predicate.
-        let has_call = out.edges.iter().any(|e| {
-            e.kind == EdgeKind::Calls && e.from.name == "App" && e.to.name == "Button"
-        });
+        let has_call = out
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Calls && e.from.name == "App" && e.to.name == "Button");
         assert!(
             has_call,
             "expected App → Button Calls edge from <Button/>; got edges = {:?}",
@@ -864,10 +860,7 @@ export function Page() {
         let lowercase_calls: Vec<_> = out
             .edges
             .iter()
-            .filter(|e| {
-                e.kind == EdgeKind::Calls
-                    && (e.to.name == "div" || e.to.name == "span")
-            })
+            .filter(|e| e.kind == EdgeKind::Calls && (e.to.name == "div" || e.to.name == "span"))
             .collect();
         assert!(
             lowercase_calls.is_empty(),

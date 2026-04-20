@@ -160,12 +160,7 @@ fn emit_function(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &m
 
 /// Emit a function symbol for `const Foo = (x) => ...` / `const Foo =
 /// function() {...}`. Mirrors the TS driver's `emit_arrow_const`.
-fn emit_arrow_const(
-    node: tree_sitter::Node<'_>,
-    source: &str,
-    path: &Path,
-    out: &mut ParseOutput,
-) {
+fn emit_arrow_const(node: tree_sitter::Node<'_>, source: &str, path: &Path, out: &mut ParseOutput) {
     let src_bytes = source.as_bytes();
     let mut cursor = node.walk();
     let Some(declarator) = node

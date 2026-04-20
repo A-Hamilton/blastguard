@@ -438,10 +438,7 @@ mod tests {
             new_text: "return 42".to_owned(),
         }];
         let snippet = build_diff_snippet(pre, &changes, std::path::Path::new("src/a.rs"));
-        assert_eq!(
-            snippet,
-            "@@ src/a.rs:L2 @@\n-return 2\n+return 42"
-        );
+        assert_eq!(snippet, "@@ src/a.rs:L2 @@\n-return 2\n+return 42");
     }
 
     #[test]

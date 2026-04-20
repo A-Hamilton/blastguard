@@ -544,16 +544,9 @@ pub fn resolve_calls(graph: &mut CodeGraph) {
             // returns empty because reverse_edges is keyed on the
             // placeholder kind, not the declaration's kind.
             if let Some(names) = file_names.get(&edge.to.file) {
-                if let Some((_, actual_kind)) =
-                    names.iter().find(|(n, _)| n == target_name)
-                {
+                if let Some((_, actual_kind)) = names.iter().find(|(n, _)| n == target_name) {
                     if *actual_kind != edge.to.kind {
-                        rewrites.push((
-                            from_id.clone(),
-                            idx,
-                            edge.to.file.clone(),
-                            *actual_kind,
-                        ));
+                        rewrites.push((from_id.clone(), idx, edge.to.file.clone(), *actual_kind));
                     }
                     continue;
                 }

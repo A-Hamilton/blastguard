@@ -159,11 +159,7 @@ pub fn detect_async_change(graph: &CodeGraph, old: &Symbol, new: &Symbol) -> Opt
 /// removed symbol's id. Plan 1's `remove_file` preserves these dangling
 /// edges for exactly this detection path.
 #[must_use]
-pub fn detect_orphan(
-    graph: &CodeGraph,
-    removed: &Symbol,
-    project_root: &Path,
-) -> Option<Warning> {
+pub fn detect_orphan(graph: &CodeGraph, removed: &Symbol, project_root: &Path) -> Option<Warning> {
     let dangling: Vec<&SymbolId> = graph
         .forward_edges
         .iter()
@@ -381,7 +377,8 @@ mod detector_tests {
         let mut new = target.clone();
         new.signature = "processRequest(req, res, next)".to_string();
 
-        let warning = detect_signature(&g, &old, &new, std::path::Path::new(".")).expect("should fire");
+        let warning =
+            detect_signature(&g, &old, &new, std::path::Path::new(".")).expect("should fire");
         assert_eq!(warning.kind, WarningKind::Signature);
         assert!(
             warning.body.contains("processRequest"),
@@ -485,7 +482,8 @@ mod detector_tests {
         let mut new = iface.clone();
         new.signature = "interface Greeter { greet(name: string): string }".to_string();
 
-        let warning = detect_interface_break(&g, &old, &new, std::path::Path::new(".")).expect("should fire");
+        let warning =
+            detect_interface_break(&g, &old, &new, std::path::Path::new(".")).expect("should fire");
         assert_eq!(warning.kind, WarningKind::InterfaceBreak);
         assert!(warning.body.contains("Greeter"));
         assert!(warning.body.contains("EnglishGreeter") || warning.body.contains("1 impl"));
