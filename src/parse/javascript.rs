@@ -263,6 +263,30 @@ fn emit_import(
         file: path.to_path_buf(),
         line,
     });
+
+    // Also emit an Imports edge so `resolve_imports` can try a
+    // `tsconfig.json` path-alias lookup. Mirrors the TS parser for
+    // projects that use `jsconfig.json` / `tsconfig.json` with JS.
+    let module_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_owned();
+    out.edges.push(Edge {
+        from: SymbolId {
+            file: path.to_path_buf(),
+            name: module_name,
+            kind: SymbolKind::Module,
+        },
+        to: SymbolId {
+            file: std::path::PathBuf::from(source_specifier),
+            name: String::new(),
+            kind: SymbolKind::Module,
+        },
+        kind: EdgeKind::Imports,
+        line,
+        confidence: Confidence::Unresolved,
+    });
 }
 
 /// Return `true` if any direct child token's text matches `needle`.

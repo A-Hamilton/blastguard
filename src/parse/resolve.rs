@@ -341,8 +341,13 @@ pub fn resolve_rs(project_root: &Path, _from_file: &Path, spec: &str) -> Resolve
 pub fn resolve_imports(graph: &mut CodeGraph, project_root: &Path) {
     let tsconfig = load_tsconfig(project_root).ok().flatten();
 
-    // Phase 1: collect rewrites so we don't mutate while iterating.
+    // Phase 1: collect rewrites so we don't mutate while iterating. Track
+    // the original spec alongside the (file, idx) so we can also prune the
+    // parallel LibraryImport entry when the edge resolves to internal —
+    // otherwise e.g. a `tsconfig.json` alias like `@shared/greet` shows up
+    // as both a resolved cross-file import AND a stale external library.
     let mut rewrites: Vec<(SymbolId, usize, PathBuf)> = Vec::new();
+    let mut resolved_specs: Vec<(PathBuf, String)> = Vec::new();
     for (from_id, edges) in &graph.forward_edges {
         for (idx, edge) in edges.iter().enumerate() {
             if edge.kind != EdgeKind::Imports || edge.confidence != Confidence::Unresolved {
@@ -364,6 +369,7 @@ pub fn resolve_imports(graph: &mut CodeGraph, project_root: &Path) {
             };
             if let ResolveResult::Internal(new_path) = result {
                 rewrites.push((from_id.clone(), idx, new_path));
+                resolved_specs.push((from_id.file.clone(), spec.into_owned()));
             }
         }
     }
@@ -404,6 +410,38 @@ pub fn resolve_imports(graph: &mut CodeGraph, project_root: &Path) {
         }
         *graph.centrality.entry(new_to).or_insert(0) += 1;
     }
+
+    // Phase 3: prune LibraryImport entries whose spec resolved to internal.
+    // The TS/JS parser emits a LibraryImport alongside the Imports edge for
+    // bare specifiers so `tsconfig` aliases get a chance; once the edge
+    // resolves, the parallel LibraryImport is stale.
+    //
+    // `library` is the canonical head (e.g. `@shared/greet` for scoped,
+    // `lodash` for unscoped `lodash/merge`), so match against spec's
+    // head via the same scoped-vs-unscoped logic the parser used.
+    if !resolved_specs.is_empty() {
+        graph.library_imports.retain(|li| {
+            !resolved_specs
+                .iter()
+                .any(|(file, spec)| *file == li.file && library_matches_spec(&li.library, spec))
+        });
+    }
+}
+
+/// Return `true` if `library` matches the canonical head of `spec` under
+/// the TS parser's scoped/unscoped rule (`@scope/pkg` → `@scope/pkg`,
+/// `lodash/merge` → `lodash`).
+fn library_matches_spec(library: &str, spec: &str) -> bool {
+    let head = if spec.starts_with('@') {
+        let mut parts = spec.splitn(3, '/');
+        match (parts.next(), parts.next()) {
+            (Some(scope), Some(pkg)) => format!("{scope}/{pkg}"),
+            _ => spec.to_owned(),
+        }
+    } else {
+        spec.split('/').next().unwrap_or(spec).to_owned()
+    };
+    library == head
 }
 
 /// Walk every `EdgeKind::Calls` edge with [`Confidence::Unresolved`] whose
