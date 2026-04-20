@@ -12,6 +12,23 @@ Open-source Rust MCP server (MIT). Three tools designed to lift AI coding agents
 
 BlastGuard does not replace or gate the agent's native tools. It offers richer alternatives the agent can choose when useful.
 
+## Hard Rules (Do Not)
+
+- **Do not edit `Cargo.toml` by hand** for dependencies. Use `cargo add <crate>` / `cargo add --dev <crate>`. Hand-edit only for `[features]`, `[profile.*]`, workspace config.
+- **Do not touch `Cargo.lock`** manually. Let `cargo` regenerate it.
+- **Do not invent crate APIs.** `rmcp`, `tree-sitter`, `sqlite-vec`, `fastembed` all evolve fast — validate via `mcp__context7` before writing against them. Your training memory is stale.
+- **Do not use `println!` / `eprintln!` / `print!`** in any code path. Use `tracing::{debug,info,warn,error}!`. The MCP stdio transport owns stdout; stdout writes break the protocol.
+- **Do not use `.unwrap()` / `.expect()`** outside tests, build scripts, or genuinely unreachable branches documented with a comment explaining why.
+- **Do not use `panic!` / `todo!` / `unimplemented!`** in committed code. Return an error.
+- **Do not swallow errors** with `let _ = result;` or `.ok()` silently. Log at `warn` or propagate.
+- **Do not spawn blocking work on the Tokio runtime** — use `tokio::task::spawn_blocking` or `rayon` for CPU work (parsing, BLAKE3, embeddings).
+- **Do not add a dependency** without checking it's actively maintained and the version is in SPEC.md's verified list. New deps need a line in CLAUDE.md + Cargo.toml comment explaining why.
+- **Do not create README / docs files** unless asked. `SPEC.md`, code, and commit messages are the record.
+- **Do not use `pub` by default.** Start with `pub(crate)` and narrow where possible. Only promote to `pub` at the crate's public API surface.
+- **Do not write integration tests that shell out to the real benchmark.** Keep unit tests fast (<5s total). Benchmark harness is opt-in via a separate binary or `--ignored` test.
+- **Do not over-abstract.** Three similar match arms is fine — premature traits hurt more than they help. Three concrete impls first, trait extraction when a fourth case forces it.
+- **Do not add features beyond the current phase.** Phase 2 work is blocked until Phase 1 ships benchmark numbers.
+
 ## Evidence-Backed Performance Target
 
 Realistic projection based on peer-reviewed research:
@@ -75,23 +92,6 @@ Senior Rust engineer building an MCP server. Direct, assume competence, skip ple
 **Decision discipline:** state the chosen approach in one line before acting. When the user is wrong, push back concisely with evidence. If two paths exist and the choice matters, give both in 1–2 sentences — don't pad.
 
 **Model policy:** main session uses `opusplan` — Opus 4.7 for planning/architecture, auto-switches to Sonnet 4.6 for execution. Subagents run Sonnet by default. Escalate with `/effort high` or `xhigh` when stuck on hard graph/concurrency reasoning.
-
-## Hard Rules (Do Not)
-
-- **Do not edit `Cargo.toml` by hand** for dependencies. Use `cargo add <crate>` / `cargo add --dev <crate>`. Hand-edit only for `[features]`, `[profile.*]`, workspace config.
-- **Do not touch `Cargo.lock`** manually. Let `cargo` regenerate it.
-- **Do not invent crate APIs.** `rmcp`, `tree-sitter`, `sqlite-vec`, `fastembed` all evolve fast — validate via `mcp__context7` before writing against them. Your training memory is stale.
-- **Do not use `println!` / `eprintln!` / `print!`** in any code path. Use `tracing::{debug,info,warn,error}!`. The MCP stdio transport owns stdout; stdout writes break the protocol.
-- **Do not use `.unwrap()` / `.expect()`** outside tests, build scripts, or genuinely unreachable branches documented with a comment explaining why.
-- **Do not use `panic!` / `todo!` / `unimplemented!`** in committed code. Return an error.
-- **Do not swallow errors** with `let _ = result;` or `.ok()` silently. Log at `warn` or propagate.
-- **Do not spawn blocking work on the Tokio runtime** — use `tokio::task::spawn_blocking` or `rayon` for CPU work (parsing, BLAKE3, embeddings).
-- **Do not add a dependency** without checking it's actively maintained and the version is in SPEC.md's verified list. New deps need a line in CLAUDE.md + Cargo.toml comment explaining why.
-- **Do not create README / docs files** unless asked. `SPEC.md`, code, and commit messages are the record.
-- **Do not use `pub` by default.** Start with `pub(crate)` and narrow where possible. Only promote to `pub` at the crate's public API surface.
-- **Do not write integration tests that shell out to the real benchmark.** Keep unit tests fast (<5s total). Benchmark harness is opt-in via a separate binary or `--ignored` test.
-- **Do not over-abstract.** Three similar match arms is fine — premature traits hurt more than they help. Three concrete impls first, trait extraction when a fourth case forces it.
-- **Do not add features beyond the current phase.** Phase 2 work is blocked until Phase 1 ships benchmark numbers.
 
 ## Preferred Patterns
 
