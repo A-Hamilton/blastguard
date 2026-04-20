@@ -28,3 +28,8 @@ bench/**/__pycache__/
 bench/.pytest_cache/
 bench/.evaluator/
 bench/.sweagent-repo/
+
+# Microbench rollout artifacts — large .jsonl files, one per run.
+# One file intentionally kept as the grader's smoke-test baseline.
+bench/runs/
+!bench/runs/20260420-014947-chain-search-to-graph.jsonl
