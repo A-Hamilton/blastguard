@@ -3,6 +3,7 @@
 //! symbol in [`crate::session::SessionState::modified_symbols`].
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::graph::types::{CodeGraph, SymbolId};
 use crate::runner::TestFailure;
@@ -10,11 +11,15 @@ use crate::session::SessionState;
 
 /// Append attribution hints to each failure's `message`. Non-destructive
 /// for failures whose stack/file matches nothing in the session.
+///
+/// `project_root` is used to render the annotation's file path relative
+/// so the "YOU MODIFIED" hint fits the agent-facing output convention.
 #[must_use]
 pub fn annotate_failures(
     graph: &CodeGraph,
     session: &SessionState,
     failures: Vec<TestFailure>,
+    project_root: &Path,
 ) -> Vec<TestFailure> {
     let modified_index: HashSet<&SymbolId> = session
         .modified_symbols()
@@ -39,10 +44,11 @@ pub fn annotate_failures(
                         };
                         if stack_line >= sym.line_start && stack_line <= sym.line_end {
                             let n = session.edits_ago(id).unwrap_or(0);
+                            let rel = id.file.strip_prefix(project_root).unwrap_or(&id.file);
                             hits.push(format!(
                                 "YOU MODIFIED {} in {}:{} ({} edits ago)",
                                 id.name,
-                                id.file.display(),
+                                rel.display(),
                                 sym.line_start,
                                 n
                             ));
@@ -103,7 +109,7 @@ mod tests {
             stack: vec![(PathBuf::from("src/handler.ts"), 12)],
         }];
 
-        let annotated = annotate_failures(&g, &session, failures);
+        let annotated = annotate_failures(&g, &session, failures, std::path::Path::new("."));
         assert!(
             annotated[0].message.contains("YOU MODIFIED processRequest"),
             "got: {}",
@@ -127,7 +133,7 @@ mod tests {
             stack: vec![],
         }];
 
-        let annotated = annotate_failures(&g, &session, failures);
+        let annotated = annotate_failures(&g, &session, failures, std::path::Path::new("."));
         assert_eq!(annotated[0].message, "Error");
     }
 
@@ -151,7 +157,7 @@ mod tests {
             stack: vec![(PathBuf::from("src/a.ts"), 5)],
         }];
 
-        let annotated = annotate_failures(&g, &session, failures);
+        let annotated = annotate_failures(&g, &session, failures, std::path::Path::new("."));
         assert!(
             annotated[0].message.contains("1 edits ago"),
             "got: {}",

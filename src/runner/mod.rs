@@ -107,7 +107,7 @@ pub fn run_tests(
     let annotated = {
         let g = graph.lock().expect("graph lock poisoned");
         let s = session.lock().expect("session lock poisoned");
-        attribute::annotate_failures(&g, &s, results.failures)
+        attribute::annotate_failures(&g, &s, results.failures, project_root)
     };
     results.failures = annotated;
 

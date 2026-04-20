@@ -127,14 +127,15 @@ pub fn orchestrate(
     // Fast-path: create_file — write the file fresh and reparse.
     if request.create_file {
         if request.file.exists() {
+            let rel = request
+                .file
+                .strip_prefix(project_root)
+                .unwrap_or(&request.file);
             return Err(BlastGuardError::Io {
                 path: request.file.clone(),
                 source: std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
-                    format!(
-                        "create_file=true but {} already exists",
-                        request.file.display()
-                    ),
+                    format!("create_file=true but {} already exists", rel.display()),
                 ),
             });
         }
