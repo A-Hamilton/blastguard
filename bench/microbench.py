@@ -605,16 +605,22 @@ def main() -> int:
         return 2
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    # Truncate any pre-existing file at this path — the per-rollout
+    # append below assumes a fresh start.
+    args.output.write_text("")
     results: list[RunResult] = []
 
-    for seed_idx in range(1, args.seeds + 1):
-        for task in selected_tasks:
-            for arm in ("raw", "blastguard"):
-                # Clean-cache discipline: each rollout starts from a cold
-                # llama-server KV cache so the `cached_input_tokens` metric
-                # isn't inflated by prior rollouts. See _flush_model_cache.
-                _flush_model_cache(args.api_base)
-                print(f"\n=== task={task['id']} arm={arm} seed={seed_idx} ===")
+    # Batch by arm with a single hard reset between arms. This is cheaper
+    # than flushing between every rollout (60 cold starts → 2) and cleanly
+    # separates raw-arm cache state from blastguard-arm cache state. Within
+    # an arm, cache accumulates naturally, which matches real-world agent
+    # usage where the same model process handles many queries in a row.
+    for arm in ("raw", "blastguard"):
+        print(f"\n### ARM: {arm} — hard reset then {args.seeds * len(selected_tasks)} rollouts ###", flush=True)
+        _flush_model_cache(args.api_base)
+        for seed_idx in range(1, args.seeds + 1):
+            for task in selected_tasks:
+                print(f"\n=== task={task['id']} arm={arm} seed={seed_idx} ===", flush=True)
                 r = run_task(
                     task=task,
                     arm=arm,
@@ -632,15 +638,16 @@ def main() -> int:
                 print(
                     f"  seed={seed_idx} turns={r.turns} in={r.input_tokens} "
                     f"out={r.output_tokens} cost=${r.total_cost_usd:.4f} wall={r.wall_seconds:.1f}s "
-                    f"stop={r.stopped_reason}"
+                    f"stop={r.stopped_reason}",
+                    flush=True,
                 )
-                print(f"  tools: {r.tool_calls}")
-                print(f"  answer (first 200 chars): {r.final_answer[:200]!r}")
+                print(f"  tools: {r.tool_calls}", flush=True)
+                print(f"  answer (first 200 chars): {r.final_answer[:200]!r}", flush=True)
                 results.append(r)
-
-    with args.output.open("w", encoding="utf-8") as f:
-        for r in results:
-            f.write(json.dumps(asdict(r)) + "\n")
+                # Append-on-each-rollout so partial progress is durable if
+                # the bench is killed mid-run.
+                with args.output.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(asdict(r)) + "\n")
 
     # Summary table
     print("\n\n=== SUMMARY ===")
