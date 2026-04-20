@@ -68,13 +68,30 @@ attribution after a batch of edits.
 
 ## Features
 
-- **4 languages** — TypeScript, JavaScript, Python, Rust. Go is deferred to post-MVP
-  pending evidence that Go tasks are a measurable loss.
-- **Sub-500ms warm start** on a 10K-file project via BLAKE3 Merkle cache.
-- **Live reindex** — `notify-debouncer-mini` at 100ms keeps the graph current on
-  file saves outside the `apply_change` path.
-- **Gitignore-aware** — the walker, grep fallback, and watcher all respect
-  `.gitignore`.
+- **4 languages + JSX** — TypeScript, JavaScript, Python, Rust.
+  TSX/JSX parsed with the correct tree-sitter grammar; `<Component />`
+  and `<Radix.Button>` JSX usages become first-class Calls edges.
+  Modern idioms covered: arrow-function consts (`const Foo = () =>
+  {}`), async arrows, class methods with full signatures, Python
+  package-relative imports (`.sub.leaf`, `..mid`), CommonJS
+  `require()`, Rust `pub use sibling::X` and `mod_item` declarations,
+  TypeScript `tsconfig.json` path aliases (`@shared/*`). Go is
+  deferred to post-MVP pending evidence that Go tasks are a
+  measurable loss.
+- **Cross-file cascade warnings** — edit a function in one file and
+  `apply_change` names every caller across the project that would
+  break. Resolver chain runs after every re-index path (cold_index,
+  warm_start, watcher, apply_change reparse), so the warnings stay
+  accurate through live edits.
+- **Sub-500ms warm start** on a 10K-file project via BLAKE3 Merkle
+  cache.
+- **Live reindex** — `notify-debouncer-mini` at 100ms keeps the graph
+  current on file saves outside the `apply_change` path.
+- **Gitignore-aware** — the walker, grep fallback, and watcher all
+  respect `.gitignore`.
+- **Compact path rendering** — every agent-facing response (tool
+  hits, warning bodies, bundled context, test attribution) renders
+  project-relative paths, never absolute tempdir / home prefixes.
 
 ## Honest positioning
 
@@ -105,44 +122,82 @@ UC Berkeley "BenchJack" `conftest.py` exploit (any change to `conftest.py`,
 
 ### What's verified today (not projected)
 
-- Rust codebase: 253 library tests pass, clippy pedantic clean, `cargo fmt` clean.
-- MCP handshake + all three tools live-tested against the release binary.
-- `search` structural queries (outline / callers / find / exports / libraries)
-  return correct results on this repo.
-- `apply_change` error propagation and `run_tests` cargo auto-detect verified.
-- SWE-agent integration: agent invokes BlastGuard tools via the bundle over
-  real MCP (4 tool calls on synthetic task, exit_status=submitted, $0.01 spend).
-- **Measured micro-benchmark wins on Gemma-4 26B (local, zero API cost):**
-  BG arm consistently beats a native-tools-only arm on head-to-head runs
-  of real exploration tasks on this repo:
-  - `explore-cold-index` (intra-file): BG arm **−60% input tokens, −78%
-    wall time**, 3× `blastguard_search` only (no native tools used).
-  - `chain-search-to-graph` (cross-file): BG arm **−29% input tokens,
-    −88% wall time (8.7× faster)** — more turns than raw but each turn
-    is cheaper because BlastGuard responses are small vs raw's multi-KB
-    `read_file` outputs.
-  - See `docs/MICROBENCH.md` for the full measurement trajectory
-    across 6+ tuning rounds, honest negative results, and the research
-    citations (arXiv:2602.14878 tool-description compression,
-    arXiv:2604.11716 step-type classification) that drove the gains.
+- Rust codebase: 284 library tests pass, clippy pedantic clean,
+  `cargo fmt` clean.
+- MCP handshake + all three tools live-tested against the release
+  binary. Every MCP-facing response renders project-relative paths —
+  no absolute tempdir / home prefixes leak into agent context.
+- **Cross-file resolution works end-to-end** for Rust, Python, TS,
+  JS, and TSX. Verified via a live-probe harness that seeds tempdir
+  fixtures and queries BlastGuard over stdio:
+  - Rust: `use crate::foo` / `use sibling_mod::X` / `pub use mod::Y`
+    all resolve. `mod_item` declarations appear in outlines.
+  - TS/TSX: relative imports, `tsconfig.json` path aliases
+    (`@shared/*`), JSX component calls (`<Button>`, `<Radix.Button>`),
+    arrow-const declarations (`const Foo = () => {}`).
+  - JS: ES-module `import` AND CommonJS `require('./x')`, arrow-const
+    declarations, full method signatures in outlines.
+  - Python: absolute dotted imports AND package-relative (`.sub.leaf`,
+    `..mid`) imports, class-method callers, cross-file cascade
+    warnings on `apply_change`.
+- **Cascade warnings** fire cross-file on `apply_change`: edit a
+  function in one file, the SIGNATURE warning names the callers
+  in other files that would break.
+- **Quality measurement framework** (priority-ordered, per user spec):
+  - Priority 1a: `bench/microbench_grader.py` — deterministic
+    substring grading; BG correctness must stay within 2pp of raw.
+  - Priority 1b: `bench/microbench_judge.py` — LLM-as-judge with
+    blind randomized A/B pairwise ranking across three axes
+    (correctness, substance, conciseness), opt-in via
+    `microbench --run-judge`.
+  - Priority 2: `bench/stats_aggregate.py` — input/output token
+    deltas with paired-difference 95% CI.
+  - Priority 3: wall time — indicator only on local Gemma
+    (thinking-mode inflates wall beyond cloud-API reality).
+- **Measured micro-benchmark wins on Gemma-4 26B (local, zero API
+  cost):** BG arm consistently beats a native-tools-only arm on
+  real exploration tasks on this repo:
+  - `explore-cold-index` (intra-file): BG arm **−60% input tokens,
+    −78% wall time**, 3× `blastguard_search` only (no native tools).
+  - Cross-file tasks: resolver chain landed after round 6; round-7
+    data on `chain-search-to-graph` is documented honestly in
+    `docs/MICROBENCH.md` as a mixed result (−34% tokens, +379% wall
+    on Gemma thinking-mode, correctness equivalent). Re-measure
+    pending on a non-thinking-mode model.
+  - See `docs/MICROBENCH.md` for the full trajectory across six
+    tuning rounds plus the round-7 post-resolver-chain result,
+    and the research citations (arXiv:2602.14878 tool-description
+    compression, arXiv:2604.11716 step-type classification,
+    arXiv:2306.05685 LLM-as-judge bias mitigations) that drove the
+    design.
 
 What's pending: the lift number on SWE-bench Pro. Waiting on upstream
 SWE-agent fixes or community contribution.
 
 ## Known limitations (Phase 1)
 
-- Cross-file call resolution is **unambiguous-only** — when exactly one file
-  that a caller imports declares a symbol with the called name, the Calls
-  edge is rewritten to that file and the edge's confidence becomes
-  `Inferred`. When two or more imports declare the same name, the edge
-  stays `Unresolved` and `callers of X` falls back to listing the importer
-  files so the agent can grep them. A full type-aware resolver (follow
-  identifier origin through `from X import Y as Z` aliases and re-exports)
-  is a Phase 2 item contingent on benchmark data.
-- Dynamic dispatch (`getattr`, `obj[method]()`) gets `Confidence::Inferred` and
-  surfaces to the agent with a caveat rather than being dropped.
+- Cross-file call resolution is **unambiguous-only** — when exactly
+  one file that a caller imports declares a symbol with the called
+  name, the Calls edge is rewritten to that file and the edge's
+  confidence becomes `Inferred`. When two or more imports declare
+  the same name, the edge stays `Unresolved` and `callers of X`
+  falls back to a per-importer-file hint so the agent can grep them.
+- **Re-export chains don't follow through.** A `pub use
+  inner::fn_name` in `mod.rs` doesn't teach the resolver that
+  `fn_name` is reachable through that module. `chain from X to Y`
+  falls back to listing both endpoints plus a "bridge via imports
+  of / callers of" hint when a path can't be found. Full re-export
+  resolution is Phase 2.
+- Dynamic dispatch (`getattr`, `obj[method]()`) gets
+  `Confidence::Inferred` and surfaces to the agent with a caveat
+  rather than being dropped.
+- **CommonJS named-export assignments** (`module.exports.name =
+  () => ...`) are not captured as symbols. Rare in modern code;
+  ES-module `export` and `module.exports = { ... }` shorthand both
+  work.
 - No Go support.
-- Semantic search (`around X`, embeddings) is a feature-flagged Phase 2 item.
+- Semantic search (`around X`, embeddings) is a feature-flagged
+  Phase 2 item.
 
 ## Related work
 
