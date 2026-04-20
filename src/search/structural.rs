@@ -4,7 +4,7 @@
 //! [`CodeGraph`] and renders hits via [`super::hit::SearchHit::structural`].
 
 use crate::graph::ops::{callees, callers, find_by_name, shortest_path};
-use crate::graph::types::{CodeGraph, Confidence, EdgeKind, SymbolId};
+use crate::graph::types::{CodeGraph, Confidence, EdgeKind, Symbol, SymbolId};
 use crate::search::hit::{sort_by_centrality, SearchHit};
 
 /// `find X` / `where is X` — centrality-ranked name lookup with fuzzy fallback.
@@ -148,22 +148,37 @@ pub fn callees_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchH
         .collect()
 }
 
-/// `chain from X to Y` — BFS shortest path, rendered as a sequence of hits.
+/// `chain from X to Y` — BFS shortest path across forward call edges.
 ///
-/// When no graph path exists (common on repos with re-export chains like
-/// `pub use inner::fn_name;` — Phase 1 doesn't follow those), returns
-/// hint-shaped hits showing both endpoints and suggesting next steps.
-/// Empty `Vec` is reserved for "neither endpoint symbol exists" so the
-/// dispatcher can distinguish the cases.
+/// Two modes:
+///
+/// - **Symbol mode** (`Y` is a bare name): returns the shortest `Vec` of
+///   structural hits from the `from` symbol to the `to` symbol. If either
+///   name doesn't resolve, or no path exists, returns a hint-shaped hit
+///   with guidance.
+/// - **Path mode** (`Y` is a file path — contains `/`, `\`, or ends in a
+///   known source extension): returns the shortest chain from `from` into
+///   any symbol whose file matches `Y`, followed by structural hits for
+///   every other symbol in the target file that is a direct Calls-successor
+///   of any node on the chain. Agents use this to answer "which function
+///   in FILE does X reach?" in a single query.
+///
+/// Empty `Vec` is reserved for "neither endpoint exists" so the dispatcher
+/// can distinguish the cases.
 #[must_use]
 pub fn chain_from_to(graph: &CodeGraph, from_name: &str, to_name: &str) -> Vec<SearchHit> {
     let from_ids = find_by_name(graph, from_name);
-    let to_ids = find_by_name(graph, to_name);
     let Some(&from_id) = from_ids.first() else {
         return vec![SearchHit::empty_hint(&format!(
             "no symbol named '{from_name}' found; try `find {from_name}` for fuzzy matches"
         ))];
     };
+
+    if is_path_like(to_name) {
+        return chain_to_file_path(graph, from_id, to_name);
+    }
+
+    let to_ids = find_by_name(graph, to_name);
     let Some(&to_id) = to_ids.first() else {
         return vec![SearchHit::empty_hint(&format!(
             "no symbol named '{to_name}' found; try `find {to_name}` for fuzzy matches"
@@ -193,12 +208,100 @@ pub fn chain_from_to(graph: &CodeGraph, from_name: &str, to_name: &str) -> Vec<S
     hits
 }
 
+/// Path-mode of `chain_from_to`: BFS from `from_id` to the first symbol in
+/// the target file, plus sibling Calls-successors in the same file.
+///
+/// Caps the candidate list at [`CHAIN_FILE_CANDIDATE_CAP`] to keep the
+/// response bounded on large target files.
+fn chain_to_file_path(graph: &CodeGraph, from_id: &SymbolId, to_path: &str) -> Vec<SearchHit> {
+    use std::path::Path;
+
+    let target = Path::new(to_path);
+
+    // File not indexed at all → useful hint so the agent doesn't retry blindly.
+    let any_symbol_in_file = graph
+        .symbols
+        .keys()
+        .any(|id| id.file.ends_with(target));
+    if !any_symbol_in_file {
+        return vec![SearchHit::empty_hint(&format!(
+            "no symbols indexed in {to_path}; try `outline of {to_path}` or check the path spelling"
+        ))];
+    }
+
+    let Some(path) = crate::graph::ops::shortest_path_to_predicate(graph, from_id, |id| {
+        id.file.ends_with(target)
+    }) else {
+        // Indexed but unreachable via forward call edges.
+        let mut hits: Vec<SearchHit> = Vec::new();
+        if let Some(sym) = graph.symbols.get(from_id) {
+            hits.push(SearchHit::structural(sym));
+        }
+        hits.push(SearchHit::empty_hint(&format!(
+            "no call-graph path from {from_name} to any symbol in {to_path}; try `callees of {from_name}` then filter by file",
+            from_name = from_id.name,
+        )));
+        return hits;
+    };
+
+    let mut hits: Vec<SearchHit> = path
+        .iter()
+        .filter_map(|id| graph.symbols.get(id))
+        .map(SearchHit::structural)
+        .collect();
+
+    // Sibling candidates: symbols in the target file that are direct
+    // Calls-successors of any node on the chain, excluding chain nodes.
+    let chain_ids: std::collections::HashSet<&SymbolId> = path.iter().collect();
+    let mut seen: std::collections::HashSet<&SymbolId> = std::collections::HashSet::new();
+    let mut candidates: Vec<&Symbol> = Vec::new();
+    for node in &path {
+        let Some(edges) = graph.forward_edges.get(node) else {
+            continue;
+        };
+        for e in edges {
+            if e.kind != EdgeKind::Calls {
+                continue;
+            }
+            if !e.to.file.ends_with(target) {
+                continue;
+            }
+            if chain_ids.contains(&e.to) {
+                continue;
+            }
+            if !seen.insert(&e.to) {
+                continue;
+            }
+            if let Some(sym) = graph.symbols.get(&e.to) {
+                candidates.push(sym);
+            }
+        }
+    }
+    // Centrality-sorted, highest first.
+    candidates.sort_by_key(|s| {
+        std::cmp::Reverse(graph.centrality.get(&s.id).copied().unwrap_or(0))
+    });
+    let overflow = candidates.len().saturating_sub(CHAIN_FILE_CANDIDATE_CAP);
+    for sym in candidates.into_iter().take(CHAIN_FILE_CANDIDATE_CAP) {
+        hits.push(SearchHit::structural(sym));
+    }
+    if overflow > 0 {
+        hits.push(SearchHit::empty_hint(&format!(
+            "{overflow} more candidate symbols in {to_path} truncated; use `outline of {to_path}` for the full list"
+        )));
+    }
+
+    hits
+}
+
+/// Upper bound on the candidate-endpoint list in `chain_to_file_path`
+/// responses. Matches the per-query cap convention used elsewhere.
+const CHAIN_FILE_CANDIDATE_CAP: usize = 10;
+
 /// Heuristic: does `s` look like a file path rather than a symbol name?
 /// True when `s` contains `/` or `\`, or when its trailing segment ends in
 /// a known source extension. Deliberately conservative so bare identifiers
 /// and qualified names like `module::fn` never trip this.
-// used in chain_from_to path-mode branch, wired in Task 3
-#[allow(dead_code)]
 fn is_path_like(s: &str) -> bool {
     const EXTS: &[&str] = &[".rs", ".ts", ".tsx", ".js", ".jsx", ".py"];
     if s.contains('/') || s.contains('\\') {
