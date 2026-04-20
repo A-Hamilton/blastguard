@@ -172,9 +172,19 @@ def _score_one_judge(
 
     result: dict[str, AxisJudgment] = {}
     for axis in ("correctness", "substance", "conciseness"):
-        entry = parsed.get(axis) or {}
-        pick = translate(str(entry.get("pick", "tie")))
-        reason = str(entry.get("reason", "")).strip()
+        entry = parsed.get(axis)
+        # Defensive: Gemma sometimes returns a bare string (e.g. "A") or null
+        # instead of the expected {"pick": "...", "reason": "..."} dict. Coerce
+        # both shapes into our internal record without raising.
+        if isinstance(entry, dict):
+            pick = translate(str(entry.get("pick", "tie")))
+            reason = str(entry.get("reason", "")).strip()
+        elif isinstance(entry, str):
+            pick = translate(entry)
+            reason = ""
+        else:
+            pick = "tie"
+            reason = ""
         result[axis] = AxisJudgment(pick=pick, reason=reason)
     return result
 
