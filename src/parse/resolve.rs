@@ -244,20 +244,58 @@ pub fn load_tsconfig(project_root: &Path) -> Result<Option<TsConfig>> {
 /// The Python driver stores bare relative imports (`from . import foo`) with a
 /// sentinel `library = "."`. When `spec` is `"."` or empty, this function
 /// returns [`ResolveResult::Unresolved`] because the dot-count needed to walk
-/// up directories is not propagated by the driver yet (Phase 1 limitation).
+/// Package-relative imports (specs starting with `.`) resolve against
+/// `from_file`'s package directory. `N` leading dots means walk up `N-1`
+/// levels from `from_file.parent()`, then resolve the remaining dotted
+/// tail against that base.
 ///
-/// The `from_file` parameter is accepted for API consistency with
-/// [`resolve_ts`] but is not used in Phase 1 — Python uses absolute module
-/// paths rooted at the project, not file-relative specifiers.
+/// Absolute imports (no leading dot) resolve against `project_root` and
+/// `project_root/src/`, preferring the `src/` layout.
 #[must_use]
-pub fn resolve_py(project_root: &Path, _from_file: &Path, spec: &str) -> ResolveResult {
-    if spec.is_empty() || spec == "." {
-        // Bare relative import — the driver doesn't propagate dot-count yet.
-        // Return Unresolved rather than guessing; Task 10 v2 can revisit.
+pub fn resolve_py(project_root: &Path, from_file: &Path, spec: &str) -> ResolveResult {
+    if spec.is_empty() {
         return ResolveResult::Unresolved;
     }
 
-    let rel: PathBuf = spec.split('.').collect();
+    let dot_count = spec.chars().take_while(|&c| c == '.').count();
+    let tail = &spec[dot_count..];
+
+    if dot_count > 0 {
+        // Package-relative.
+        let Some(mut base) = from_file.parent().map(Path::to_path_buf) else {
+            return ResolveResult::Unresolved;
+        };
+        for _ in 1..dot_count {
+            let Some(parent) = base.parent().map(Path::to_path_buf) else {
+                return ResolveResult::Unresolved;
+            };
+            base = parent;
+        }
+        // Keep resolution scoped to the project — silently refuse to walk
+        // above `project_root`.
+        if !base.starts_with(project_root) {
+            return ResolveResult::Unresolved;
+        }
+        if tail.is_empty() {
+            // `from . import foo` with no module-name segment — we can't
+            // pin a file without knowing which `foo` module.
+            return ResolveResult::Unresolved;
+        }
+        let rel: PathBuf = tail.split('.').collect();
+        let candidates = [
+            base.join(&rel).with_extension("py"),
+            base.join(&rel).join("__init__.py"),
+        ];
+        for c in &candidates {
+            if c.is_file() {
+                return ResolveResult::Internal(c.clone());
+            }
+        }
+        return ResolveResult::Unresolved;
+    }
+
+    // Absolute dotted import.
+    let rel: PathBuf = tail.split('.').collect();
     let candidates = [
         project_root.join("src").join(&rel).with_extension("py"),
         project_root.join("src").join(&rel).join("__init__.py"),
@@ -271,7 +309,7 @@ pub fn resolve_py(project_root: &Path, _from_file: &Path, spec: &str) -> Resolve
     }
 
     // Not found on disk — treat first dotted segment as an external library.
-    let library = spec.split('.').next().unwrap_or(spec).to_owned();
+    let library = tail.split('.').next().unwrap_or(tail).to_owned();
     ResolveResult::External {
         library,
         symbols: Vec::new(),
@@ -809,6 +847,50 @@ mod tests {
         let tmp = tempdir_with(&[("src/a.py", "")]);
         let from = tmp.path().join("src/a.py");
         let r = resolve_py(tmp.path(), &from, ".");
+        assert_eq!(r, ResolveResult::Unresolved);
+    }
+
+    #[test]
+    fn resolves_python_single_dot_relative_import() {
+        // `from .sub.leaf import leaf` inside src/pkg/mid.py → src/pkg/sub/leaf.py
+        let tmp = tempdir_with(&[
+            ("src/pkg/__init__.py", ""),
+            ("src/pkg/mid.py", ""),
+            ("src/pkg/sub/__init__.py", ""),
+            ("src/pkg/sub/leaf.py", ""),
+        ]);
+        let from = tmp.path().join("src/pkg/mid.py");
+        let r = resolve_py(tmp.path(), &from, ".sub.leaf");
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/pkg/sub/leaf.py"))
+        );
+    }
+
+    #[test]
+    fn resolves_python_double_dot_relative_import() {
+        // `from ..mid import mid` inside src/pkg/sub/deep.py → src/pkg/mid.py
+        let tmp = tempdir_with(&[
+            ("src/pkg/__init__.py", ""),
+            ("src/pkg/mid.py", ""),
+            ("src/pkg/sub/deep.py", ""),
+            ("src/pkg/sub/__init__.py", ""),
+        ]);
+        let from = tmp.path().join("src/pkg/sub/deep.py");
+        let r = resolve_py(tmp.path(), &from, "..mid");
+        assert_eq!(
+            r,
+            ResolveResult::Internal(tmp.path().join("src/pkg/mid.py"))
+        );
+    }
+
+    #[test]
+    fn python_relative_import_refuses_to_walk_above_project_root() {
+        let tmp = tempdir_with(&[("src/a.py", "")]);
+        let from = tmp.path().join("src/a.py");
+        // Too many dots — would walk above project_root. Must be Unresolved,
+        // not silently resolving to a file outside the project.
+        let r = resolve_py(tmp.path(), &from, ".....escape");
         assert_eq!(r, ResolveResult::Unresolved);
     }
 

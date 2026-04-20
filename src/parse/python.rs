@@ -259,6 +259,11 @@ fn emit_import(module_path: &str, node: tree_sitter::Node<'_>, path: &Path, out:
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_owned();
+    // Preserve leading dots — resolve_py uses them to walk up from the
+    // importing file's package. Stripping them at parse time loses the
+    // package-relative context (`from .sub.leaf` would look the same as
+    // `from sub.leaf`, resolving against project root and missing the
+    // actual file).
     out.edges.push(Edge {
         from: SymbolId {
             file: path.to_path_buf(),
@@ -266,7 +271,7 @@ fn emit_import(module_path: &str, node: tree_sitter::Node<'_>, path: &Path, out:
             kind: SymbolKind::Module,
         },
         to: SymbolId {
-            file: std::path::PathBuf::from(stripped),
+            file: std::path::PathBuf::from(module_path),
             name: String::new(),
             kind: SymbolKind::Module,
         },
