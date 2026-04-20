@@ -90,6 +90,7 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
                     "struct.decl" => emit_simple(node, source, path, &mut out, SymbolKind::Struct),
                     "enum.decl" => emit_simple(node, source, path, &mut out, SymbolKind::Enum),
                     "trait.decl" => emit_simple(node, source, path, &mut out, SymbolKind::Trait),
+                    "mod.decl" => emit_simple(node, source, path, &mut out, SymbolKind::Module),
                     "use.path" => {
                         let text = node.utf8_text(src_bytes).unwrap_or("");
                         emit_use(text, node, path, &mut out);
@@ -483,6 +484,26 @@ fn private_helper() {
     noop();
 }
 ";
+
+    #[test]
+    fn extracts_mod_declarations_as_module_symbols() {
+        // `pub mod X;` and `mod Y;` should both appear so `outline of
+        // src/lib.rs` surfaces the crate's module layout.
+        let src = "pub mod config;\nmod internal;\npub mod edit {\n    pub fn x() {}\n}\n";
+        let out = extract(&PathBuf::from("src/lib.rs"), src);
+        let mod_names: Vec<_> = out
+            .symbols
+            .iter()
+            .filter(|s| s.id.kind == SymbolKind::Module)
+            .map(|s| s.id.name.as_str())
+            .collect();
+        assert!(
+            mod_names.contains(&"config"),
+            "missing `config` module; got {mod_names:?}"
+        );
+        assert!(mod_names.contains(&"internal"));
+        assert!(mod_names.contains(&"edit"));
+    }
 
     #[test]
     fn extracts_async_fn_as_async_function() {

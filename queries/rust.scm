@@ -14,6 +14,12 @@
 (trait_item
   name: (type_identifier) @trait.name) @trait.decl
 
+; Module declarations — `mod foo;` or `mod foo { ... }`. Needed so
+; `outline of src/lib.rs` surfaces the crate's public surface (which
+; is almost entirely `pub mod X;` lines in a typical library).
+(mod_item
+  name: (identifier) @mod.name) @mod.decl
+
 ; use declarations — capture the full argument (path or path::*).
 (use_declaration
   argument: (_) @use.path) @use.decl
