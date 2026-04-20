@@ -14,6 +14,10 @@ existing repository. You will:
 
 You have native tools (Read, Write, Bash, Grep, Edit) and may use any of them.
 Write `DONE` on a line by itself when your edit is complete.
+
+Be concise and direct in your response. Prose only where it adds
+information; no preamble, no "I will now…", no summary of what you
+just said. Code blocks and the unified diff carry most of the signal.
 """
 
 BLASTGUARD_BIAS = """

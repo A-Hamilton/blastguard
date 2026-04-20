@@ -13,18 +13,40 @@ You are the gatekeeper between a microbench run and a commit. Six prior tuning r
 1. A freshly produced run file (`.jsonl` under `bench/runs/`) — the user will tell you the path or you can pick the most recent.
 2. The committed baseline in `docs/MICROBENCH.md` — the last dated row, per task.
 
-## What to check
+## What to check, in priority order
 
-For each task present in both the new run and the baseline, compare the three headline metrics for the `blastguard` arm against the `raw` arm:
+**Priority 1 — Quality (blocker).** Correctness comes first. A BG
+arm that saves tokens but answers wrong more often is a regression.
 
-1. **Median input tokens** — regression threshold: +10% or more.
-2. **Median wall-clock seconds** — regression threshold: +15% or more.
-3. **Median turn count** — regression threshold: +2 turns AND the turns-to-tokens ratio worsened.
+1a. Deterministic grading via `bench/microbench_grader.py`:
+    - `grade_rollouts(runs, TASKS)` → `GradedRollout` per rollout
+    - `correctness_rate_by_cell(graded)` → rate per (task, arm)
+    - `regression_verdict(cells, tolerance_pp=2.0)` → verdict + reasons
 
-Also check:
+    Rule: BG correctness rate must be within 2 percentage points of
+    raw per task. Any drop beyond that → `DO NOT COMMIT`.
 
-4. **`exit_status=submitted` rate** — regression threshold: any drop at all is a blocker.
-5. **Paired McNemar's `p`** on `submitted` rate, if the aggregate includes it. `p > 0.1` on a claimed-win change means the change is unsupported.
+1b. LLM-as-judge (follow-on, not yet implemented):
+    A second Gemma instance reads (task, raw_answer, blastguard_answer)
+    blindly and picks the better one. Catches fluency / subtle
+    hallucination issues that substring matching misses. When this
+    lands, it's a tie-breaker for cases where both arms are
+    "substring-correct" but one is substantively better.
+
+**Priority 2 — Tokens.** For each task present in both arms, compare:
+
+2. **Median input tokens** — regression threshold: +10% or more.
+3. **Median output tokens** — regression threshold: +10% or more.
+
+**Priority 3 — Speed.** Gemma's thinking-mode path inflates wall
+time unreliably, so this is a trend indicator, not a gate.
+
+4. **Median wall-clock seconds** — report the delta, but only flag
+   `DO NOT COMMIT` on wall time if Priorities 1 and 2 are also
+   unfavorable. A wall-only regression with tokens + quality intact
+   is likely a Gemma thinking-mode artifact.
+
+5. **Median turn count** — report the delta; not a blocker on its own.
 
 ## How to run the comparison
 
@@ -59,9 +81,12 @@ Then a bottom-line recommendation: `COMMIT OK`, `INVESTIGATE`, or `DO NOT COMMIT
 
 ## Decision rules
 
-- Any `submitted%` drop → `DO NOT COMMIT`.
-- Any `BLOCKER`-level metric regression → `DO NOT COMMIT`.
-- Only warnings → `INVESTIGATE` (ask the user to confirm acceptable trade-off).
+- Any Priority-1 (correctness) drop beyond 2pp → `DO NOT COMMIT`.
+- Any Priority-2 (token) regression beyond threshold → `DO NOT COMMIT`.
+- Priority-3 (wall time) regression alone → `INVESTIGATE` (likely
+  Gemma thinking-mode, not a true cloud-API latency regression).
+- Priority-3 regression combined with P1 or P2 regression → escalate
+  to `DO NOT COMMIT`.
 - All clean → `COMMIT OK`.
 
 ## What NOT to do

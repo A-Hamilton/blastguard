@@ -1,17 +1,24 @@
 """Centralized registry of micro-bench tasks.
 
-Each task is a dict with `id` (stable identifier for result tables) and
-`prompt` (a format-string with `{project_root}` as the only placeholder).
+Each task is a dict with:
+- `id`: stable identifier for result tables.
+- `prompt`: format-string with `{project_root}` as the only placeholder.
+- `expected_substrings`: list of case-insensitive substrings that must all
+  appear in a correct `final_answer` for `bench/microbench_grader.py` to
+  mark the rollout `correct=True`. Quality is Priority 1 — a regression
+  here blocks a commit even if token/wall numbers improved.
 
-Design: tasks are chosen to span BlastGuard's strengths and weaknesses.
-Plans 12-13 found that BG wins on intra-file outline/find and loses on
-cross-file dependency chains. The expanded set keeps that balance so
-aggregate wins are meaningful.
+Design: tasks span BlastGuard's strengths and weaknesses. Rounds 2-6
+showed BG wins on intra-file outline/find and loses on cross-file
+dependency chains. The expanded set keeps that balance so aggregate
+wins are meaningful.
 """
 
 from __future__ import annotations
 
-TASKS: list[dict[str, str]] = [
+from typing import Any
+
+TASKS: list[dict[str, Any]] = [
     # --- Existing 4 tasks (kept for continuity with rounds 2-6) ---
     {
         "id": "explore-cold-index",
@@ -21,6 +28,7 @@ TASKS: list[dict[str, str]] = [
             "what calls it. Answer in 3-5 sentences. When done, write 'DONE' "
             "on its own line."
         ),
+        "expected_substrings": ["cold_index", "walk_project"],
     },
     {
         "id": "callers-apply-edit",
@@ -30,6 +38,7 @@ TASKS: list[dict[str, str]] = [
             "it is (function name + file) and what kind of value it passes for "
             "the `old_text` argument. Answer concisely. Write 'DONE' when finished."
         ),
+        "expected_substrings": ["orchestrate", "apply.rs"],
     },
     {
         "id": "chain-search-to-graph",
@@ -41,6 +50,7 @@ TASKS: list[dict[str, str]] = [
             "operations? Name each function (file + function name) in order. "
             "Keep the answer under 10 lines. Write 'DONE' when finished."
         ),
+        "expected_substrings": ["search_tool", "dispatch", "structural"],
     },
     {
         "id": "cascade-signature-change",
@@ -53,6 +63,7 @@ TASKS: list[dict[str, str]] = [
             "with the file:line of each caller and a one-line reason. "
             "Write 'DONE' when finished."
         ),
+        "expected_substrings": ["orchestrate", "apply.rs"],
     },
     # --- Six new tasks (added in Plan 14 Task 3) ---
     {
@@ -65,6 +76,7 @@ TASKS: list[dict[str, str]] = [
             "entry points, helper utilities, edge emitters). Write 'DONE' when "
             "finished."
         ),
+        "expected_substrings": ["extract", "emit_function"],
     },
     {
         # Cross-file investigation — currently a BlastGuard weakness in Phase 1.
@@ -76,6 +88,7 @@ TASKS: list[dict[str, str]] = [
             "format it's serialized in. Answer in under 8 sentences. Write "
             "'DONE' when finished."
         ),
+        "expected_substrings": ["cache.bin", "rmp"],
     },
     {
         # Easy find + grep task — direct-symbol question where grep usually wins.
@@ -86,6 +99,7 @@ TASKS: list[dict[str, str]] = [
             "the BenchJack defense. Where is this list defined? Answer in 2-3 "
             "lines. Write 'DONE' when finished."
         ),
+        "expected_substrings": ["conftest.py", "pytest.ini"],
     },
     {
         # Refactor-lite scoping — caller graph + test impact question.
@@ -97,6 +111,7 @@ TASKS: list[dict[str, str]] = [
             "describe what the change would look like in each. Keep the answer "
             "concise — bulleted list format. Write 'DONE' when finished."
         ),
+        "expected_substrings": ["query.rs", "dispatcher.rs"],
     },
     {
         # Multi-file orientation + compare — no single clear tool winner.
@@ -108,6 +123,7 @@ TASKS: list[dict[str, str]] = [
             "different? Keep the comparison to 6 sentences or fewer. Write "
             "'DONE' when finished."
         ),
+        "expected_substrings": ["tree-sitter", "extract"],
     },
     {
         # Tests-for style question — exercises BlastGuard's run_tests or its
@@ -119,5 +135,6 @@ TASKS: list[dict[str, str]] = [
             "code paths. Give the test function name and its file:line. Keep "
             "the answer concise — bulleted list. Write 'DONE' when finished."
         ),
+        "expected_substrings": ["apply_edit", "apply.rs"],
     },
 ]
