@@ -25,10 +25,10 @@ alternatives in these situations:
 - "What's in this file?" → `blastguard_search '{"query":"outline of PATH"}'`.
   Returns every symbol's name + signature + line number in 50-300 tokens
   instead of reading the entire file with cat/Read.
-- "Who calls this function?" (within the same file) →
+- "Who calls this function?" →
   `blastguard_search '{"query":"callers of NAME"}'`. Returns structured
-  caller list vs. 10k+ grep output. Phase 1 limitation: callers are
-  same-file only; for cross-file, fall back to grep.
+  caller list including cross-file callers (unambiguous-name targets
+  only; ambiguous names fall back to a per-importer-file hint).
 - "Where is this symbol defined?" →
   `blastguard_search '{"query":"find NAME"}'`. Fuzzy name lookup over the
   code graph, returns file:line + signature.
@@ -57,11 +57,24 @@ IMPORTANT — EFFICIENCY RULES:
 2. DON'T STACK TOOLS. Never call `blastguard_search` AND `Read` AND
    `Grep` on the same target in one task unless each returned something
    genuinely new. Pick the most specific tool first, then stop.
-3. ANSWER AS SOON AS YOU HAVE ENOUGH. The goal is a correct short answer
-   in minimum turns. If you already have the file:line and the signature,
-   you're done — write the answer and submit.
+3. ANSWER AS SOON AS YOU HAVE ENOUGH, THEN STOP. The goal is a correct
+   short answer in minimum turns. As soon as you have enough data to
+   answer the question, write the answer followed by `DONE` on its own
+   line AND STOP. Do not make one more "verification" tool call. Do not
+   re-read the file to "double-check". The next token after `DONE`
+   should never be another tool call.
 4. Every extra turn costs tokens on ALL prior context. A 4-turn solve
    is ~50% cheaper than a 6-turn solve. Aim for fewest turns.
+
+STOP CONDITION — absolutely required:
+
+When you have enough information, emit TWO things in this order:
+  (a) your prose answer, concise, 3-5 sentences max.
+  (b) the literal line `DONE` on its own line.
+
+After `DONE`, stop. Do not think aloud. Do not call another tool. The
+harness terminates on the `DONE` line. Hitting the turn budget without
+`DONE` is counted as a failure even if the answer is correct.
 
 STEP-TYPE CLASSIFICATION (before EVERY tool call):
 
