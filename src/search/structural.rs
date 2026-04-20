@@ -193,12 +193,38 @@ pub fn chain_from_to(graph: &CodeGraph, from_name: &str, to_name: &str) -> Vec<S
     hits
 }
 
+/// Canonical `SymbolId` for the synthetic "import source" module anchor the
+/// parsers emit from. Every `emit_use` / `emit_import` across rust/ts/js/py
+/// uses `{ file, name = file_stem, kind = Module }` as the `from` of an
+/// Imports edge, so this gives us an O(1) key into `forward_edges`.
+fn module_source_id(file: &std::path::Path) -> SymbolId {
+    let name = file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_owned();
+    SymbolId {
+        file: file.to_path_buf(),
+        name,
+        kind: crate::graph::types::SymbolKind::Module,
+    }
+}
+
+/// Canonical `SymbolId` for the synthetic "import target" module anchor. After
+/// `resolve_imports` rewrites the raw spec to the resolved file path, every
+/// Imports edge's `to` is `{ file: resolved, name = "", kind = Module }`.
+fn module_target_id(file: &std::path::Path) -> SymbolId {
+    SymbolId {
+        file: file.to_path_buf(),
+        name: String::new(),
+        kind: crate::graph::types::SymbolKind::Module,
+    }
+}
+
 /// `imports of FILE` — files that `file` imports (forward Imports edges).
 ///
-/// Iterates `forward_edges` keyed on any symbol whose `file == file` — NOT
-/// just `file_symbols[file]`. The parsers emit Imports edges from a synthetic
-/// `SymbolKind::Module` symbol that is never inserted into `file_symbols`, so
-/// restricting the lookup to `file_symbols` would miss every real import.
+/// O(1) hashmap lookup via the canonical module-source id. Was `O(total_edges)`
+/// before the rewrite — a full-graph scan that dominated on large monorepos.
 ///
 /// `project_root` is used to render each hit's target path relative.
 #[must_use]
@@ -207,16 +233,13 @@ pub fn imports_of(
     file: &std::path::Path,
     project_root: &std::path::Path,
 ) -> Vec<SearchHit> {
+    let source = module_source_id(file);
     let mut hits = Vec::new();
-    for (from_id, edges) in &graph.forward_edges {
-        if from_id.file != file {
-            continue;
-        }
+    if let Some(edges) = graph.forward_edges.get(&source) {
         for e in edges {
-            // Only surface edges where the resolver pinned a real file. An
-            // unresolved edge's `to.file` is the raw spec text (e.g.
-            // `crate::missing`, `super::*`) — emitting those as hits leaks
-            // parser internals into the agent response.
+            // Certain-only: unresolved imports point at raw spec text
+            // (`crate::missing`, `super::*`) — filtering them here stops
+            // parser internals leaking into the response.
             if e.kind == EdgeKind::Imports && e.confidence == Confidence::Certain {
                 let rel = e.to.file.strip_prefix(project_root).unwrap_or(&e.to.file);
                 hits.push(SearchHit {
@@ -237,6 +260,11 @@ pub fn imports_of(
 }
 
 /// `importers of FILE` — files that import `file` (reverse Imports edges).
+///
+/// O(1) hashmap lookup via the canonical module-target id. Was `O(total_edges)`
+/// before the rewrite. Called inside `callers_of` and `tests_for` so the
+/// speedup compounds on every agent query.
+///
 /// `project_root` is used to render the target path relative in each hit's
 /// signature.
 #[must_use]
@@ -245,25 +273,20 @@ pub fn importers_of(
     file: &std::path::Path,
     project_root: &std::path::Path,
 ) -> Vec<SearchHit> {
+    let target = module_target_id(file);
     let mut hits = Vec::new();
-    for rev_edges in graph.reverse_edges.values() {
-        for e in rev_edges {
-            // Certain-only: unresolved imports point at the raw spec text
-            // (`crate::missing`, `super::*`, etc.) and would never match
-            // against a real file path anyway, but filter explicitly so
-            // future resolvers don't accidentally leak spec strings.
-            if e.kind == EdgeKind::Imports
-                && e.confidence == Confidence::Certain
-                && e.to.file == file
-            {
-                let rel = e.to.file.strip_prefix(project_root).unwrap_or(&e.to.file);
-                hits.push(SearchHit {
-                    file: e.from.file.clone(),
-                    line: e.line,
-                    signature: Some(format!("imports {}", rel.display())),
-                    snippet: None,
-                });
-            }
+    let Some(edges) = graph.reverse_edges.get(&target) else {
+        return hits;
+    };
+    for e in edges {
+        if e.kind == EdgeKind::Imports && e.confidence == Confidence::Certain {
+            let rel = e.to.file.strip_prefix(project_root).unwrap_or(&e.to.file);
+            hits.push(SearchHit {
+                file: e.from.file.clone(),
+                line: e.line,
+                signature: Some(format!("imports {}", rel.display())),
+                snippet: None,
+            });
         }
     }
     hits
@@ -756,9 +779,12 @@ mod tests {
             name: "a".to_string(),
             kind: SymbolKind::Module,
         };
+        // Empty name matches the parser's canonical import-target shape
+        // (emit_import sets `to.name = String::new()`). The O(1) lookup in
+        // `importers_of` keys on this convention.
         let b_id = SymbolId {
             file: PathBuf::from("b.ts"),
-            name: "b".to_string(),
+            name: String::new(),
             kind: SymbolKind::Module,
         };
         // Insert stub modules so file_symbols is populated.
@@ -789,9 +815,10 @@ mod tests {
     fn tests_for_file_filters_importers_to_test_paths_only() {
         use crate::graph::types::{Confidence, Edge, EdgeKind, SymbolKind};
         let mut g = CodeGraph::new();
+        // src_id is the edge TARGET; parser convention is empty name.
         let src_id = SymbolId {
             file: PathBuf::from("src/handler.ts"),
-            name: "handler".to_string(),
+            name: String::new(),
             kind: SymbolKind::Module,
         };
         let test_id = SymbolId {
@@ -842,7 +869,7 @@ mod tests {
         let mut g = CodeGraph::new();
         let src_id = SymbolId {
             file: PathBuf::from("src/handler.ts"),
-            name: "handler".to_string(),
+            name: String::new(),
             kind: SymbolKind::Module,
         };
         let jest_test_id = SymbolId {
@@ -908,7 +935,7 @@ mod tests {
         let mut g = CodeGraph::new();
         let src_id = SymbolId {
             file: PathBuf::from("src/handler.ts"),
-            name: "handler".to_string(),
+            name: String::new(),
             kind: SymbolKind::Module,
         };
         let spec_id = SymbolId {
@@ -981,7 +1008,7 @@ mod tests {
                 },
                 to: SymbolId {
                     file: target_file.clone(),
-                    name: "target".to_string(),
+                    name: String::new(),
                     kind: SymbolKind::Module,
                 },
                 kind: EdgeKind::Imports,

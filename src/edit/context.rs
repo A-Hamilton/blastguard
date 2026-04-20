@@ -102,9 +102,11 @@ mod tests {
     #[test]
     fn build_deduplicates_test_files() {
         let mut g = CodeGraph::new();
+        // target_id is the edge TO side; parser convention is empty name
+        // (matches the O(1) lookup in `importers_of`).
         let target_id = SymbolId {
             file: PathBuf::from("src/handler.ts"),
-            name: "handler".to_string(),
+            name: String::new(),
             kind: SymbolKind::Module,
         };
         let test_id = SymbolId {
