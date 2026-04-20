@@ -149,20 +149,48 @@ pub fn callees_of(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchH
 }
 
 /// `chain from X to Y` — BFS shortest path, rendered as a sequence of hits.
+///
+/// When no graph path exists (common on repos with re-export chains like
+/// `pub use inner::fn_name;` — Phase 1 doesn't follow those), returns
+/// hint-shaped hits showing both endpoints and suggesting next steps.
+/// Empty `Vec` is reserved for "neither endpoint symbol exists" so the
+/// dispatcher can distinguish the cases.
 #[must_use]
 pub fn chain_from_to(graph: &CodeGraph, from_name: &str, to_name: &str) -> Vec<SearchHit> {
     let from_ids = find_by_name(graph, from_name);
     let to_ids = find_by_name(graph, to_name);
-    let (Some(&from_id), Some(&to_id)) = (from_ids.first(), to_ids.first()) else {
-        return Vec::new();
+    let Some(&from_id) = from_ids.first() else {
+        return vec![SearchHit::empty_hint(&format!(
+            "no symbol named '{from_name}' found; try `find {from_name}` for fuzzy matches"
+        ))];
     };
-    let Some(path) = shortest_path(graph, from_id, to_id) else {
-        return Vec::new();
+    let Some(&to_id) = to_ids.first() else {
+        return vec![SearchHit::empty_hint(&format!(
+            "no symbol named '{to_name}' found; try `find {to_name}` for fuzzy matches"
+        ))];
     };
-    path.iter()
-        .filter_map(|id| graph.symbols.get(id))
-        .map(SearchHit::structural)
-        .collect()
+    if let Some(path) = shortest_path(graph, from_id, to_id) {
+        return path
+            .iter()
+            .filter_map(|id| graph.symbols.get(id))
+            .map(SearchHit::structural)
+            .collect();
+    }
+
+    // No graph path — return the two endpoints plus a hint so the agent
+    // has somewhere to go next instead of a dead-end empty response.
+    let mut hits: Vec<SearchHit> = Vec::new();
+    if let Some(sym) = graph.symbols.get(from_id) {
+        hits.push(SearchHit::structural(sym));
+    }
+    if let Some(sym) = graph.symbols.get(to_id) {
+        hits.push(SearchHit::structural(sym));
+    }
+    hits.push(SearchHit::empty_hint(&format!(
+        "no call-graph path from {from_name} to {to_name} — Phase 1 doesn't follow re-export chains (`pub use`) or dynamic dispatch. \
+         Try `imports of <from-file>` and `callers of {to_name}` to bridge manually, or grep for intermediate call sites."
+    )));
+    hits
 }
 
 /// `imports of FILE` — files that `file` imports (forward Imports edges).
@@ -617,14 +645,33 @@ mod tests {
     }
 
     #[test]
-    fn chain_from_to_empty_when_unreachable() {
+    fn chain_from_to_falls_back_to_endpoints_plus_hint_when_unreachable() {
         let mut g = CodeGraph::new();
         let a = sym("a", "a.ts");
         let b = sym("b", "b.ts");
         insert_with_centrality(&mut g, a, 0);
         insert_with_centrality(&mut g, b, 0);
         let hits = chain_from_to(&g, "a", "b");
-        assert!(hits.is_empty());
+        // Two endpoint hits + one hint — never empty when both symbols exist.
+        assert_eq!(hits.len(), 3, "got: {hits:?}");
+        assert!(hits.iter().any(|h| h.file == std::path::Path::new("a.ts")));
+        assert!(hits.iter().any(|h| h.file == std::path::Path::new("b.ts")));
+        assert!(hits.iter().any(|h| h
+            .signature
+            .as_deref()
+            .is_some_and(|s| s.contains("no call-graph path"))));
+    }
+
+    #[test]
+    fn chain_from_to_empty_hint_when_from_symbol_missing() {
+        let mut g = CodeGraph::new();
+        insert_with_centrality(&mut g, sym("b", "b.ts"), 0);
+        let hits = chain_from_to(&g, "a_nonexistent", "b");
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0]
+            .signature
+            .as_deref()
+            .is_some_and(|s| s.contains("a_nonexistent")));
     }
 
     #[test]
