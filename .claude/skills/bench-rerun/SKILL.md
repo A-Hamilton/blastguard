@@ -12,11 +12,13 @@ User-only: Claude will not invoke this automatically. Type `/bench-rerun` or `/b
 
 All steps matter — cutting any one of them produced bad data last time:
 
-1. **Ensure llama-swap is up and serving Gemma-4.**
+1. **Ensure llama-swap is up AND Gemma is actually responsive** (not just the `/models` endpoint — that stays up even when Gemma is unloaded):
    ```bash
-   curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/v1/models
+   curl -m 30 -H "Content-Type: application/json" -H "Authorization: Bearer sk-local" \
+     -d '{"model":"gemma-4","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' \
+     http://127.0.0.1:8080/v1/chat/completions
    ```
-   Expect `200`. If you get anything else, start llama-swap before continuing.
+   Expect a JSON response within ~5s of a cold start. A 30s timeout with zero bytes received means Gemma is hung / OOM-crashed and needs a llama-swap restart (`systemctl --user restart llama-swap`).
 
 2. **Clear BlastGuard's index cache** so the rollout measures a true cold index, not a cached-warm one.
    ```bash
@@ -31,7 +33,9 @@ All steps matter — cutting any one of them produced bad data last time:
 
 4. **Confirm llama-swap's TTL is ≥ 7200s.** Default 300s causes mid-run connection refused errors on multi-task suites. Check `~/.config/llama-swap/config.yaml` — both `globalTTL` and the Gemma model's `ttl:` must be 7200.
 
-5. **Confirm the model is loaded with a 32K context.** `-c 8192` truncates prompts mid-rollout. `-c 32768` is correct.
+5. **Context window vs VRAM — `-c 16384` is the sweet spot for 17GB cards.** `-c 32768` pushed a Q4_K_M 26B A4B model to the edge of a 17GB GPU in round 9, causing intermittent silent OOM hangs (llama-server evicted mid-rollout, llama-swap's reload-on-demand stalled, Python hung on the HTTP call). BlastGuard rollouts don't need 32K — round-8 peak per-turn input was ~9K tokens, so 16K leaves ~2× headroom. If the card is ≥24GB, `-c 32768` is fine.
+
+6. **If Gemma hangs mid-run**: check VRAM with `rocm-smi --showmeminfo vram`. If `VRAM Used` is near `VRAM Total`, you hit OOM — reduce `-c`, reload llama-swap, retry. If `VRAM Used` is low but requests still hang, llama-swap failed to reload the model; a full `systemctl --user restart llama-swap` fixes it.
 
 ## Run
 

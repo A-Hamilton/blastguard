@@ -436,3 +436,53 @@ specific. If BG loses ≥4/10 tasks on the judge, loosen the
 BLASTGUARD_BIAS efficiency rules to preserve specificity.
 
 Pipeline commands in `.claude/skills/bench-rerun/SKILL.md`.
+
+## Round 9 — aborted, VRAM-OOM hang on 17GB GPU
+
+Attempted: 3 tasks × 1 seed × 3 judges on Gemma 4 26B A4B Q4_K_M
+via local llama-swap with `-c 32768` context.
+
+**Result:** the bench hung after ~23 minutes with no rollouts
+written to disk. Python process was idle (0% CPU for 2s sample),
+the TCP connection to llama-swap was ESTABLISHED-but-idle, and
+`POST /v1/chat/completions` timed out after 15s with zero bytes.
+No OOM in dmesg but `rocm-smi` showed llama-server fully unloaded
+(~1GB VRAM used of 17GB available).
+
+**Root cause — likely VRAM headroom, not a code bug:**
+
+Gemma 4 26B A4B Q4_K_M at `-c 32768`:
+- Model weights at Q4 ≈ 13 GB
+- KV cache at 32K context ≈ 2.5-3 GB
+- llama.cpp compute buffers ≈ 1-2 GB
+- **Subtotal ≈ 16-18 GB — right at a 17 GB VRAM ceiling.**
+
+`--n-cpu-moe 20` offloads ~5-6 GB of MoE expert weights to CPU,
+but MoE routing means VRAM demand fluctuates per token as
+different experts are touched. On a long rollout the KV cache
+growth plus expert-routing variance can exceed headroom, at which
+point the HIP allocator returns NULL, llama-server either crashes
+silently or stalls, and llama-swap's reload-on-next-request fails
+because VRAM isn't reclaimed cleanly.
+
+**Fix — reduce context to 16384:**
+
+```yaml
+# ~/.config/llama-swap/config.yaml, under gemma-4:
+cmd: |
+  /usr/bin/llama-server
+  -hf ggml-org/gemma-4-26B-A4B-it-GGUF
+  -hff gemma-4-26B-A4B-it-Q4_K_M.gguf
+  -ngl 99 --n-cpu-moe 20
+  -c 16384      # was 32768 — halves KV cache, buys VRAM headroom
+  -fa on --jinja
+  --host 127.0.0.1 --port ${PORT}
+```
+
+BlastGuard rollouts don't need 32K context — round 8 peak per-turn
+input was ~9K tokens, so 16K leaves ~2× headroom. Capture on
+24GB+ cards can revert to `-c 32768` safely.
+
+**Round 9 re-run pending on llama-swap restart.** No code changes
+blocked by this — the full `--run-judge` pipeline is verified end-
+to-end via round 8's successful single-task run.
