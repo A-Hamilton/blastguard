@@ -331,6 +331,34 @@ def _execute_tool(name: str, args: dict[str, Any], *, project_root: str, binary:
     return f"error: unknown tool {name!r}"
 
 
+def _flush_model_cache(api_base: str) -> None:
+    """Best-effort unload of the upstream model so the next request starts
+    with a cold KV cache. Targets llama-swap's ``POST /unload`` endpoint
+    (llama-swap reloads the model on the next inference request). Silent
+    no-op for cloud backends (OpenAI, OpenRouter) that don't expose this
+    endpoint — those backends don't share caches across rollouts anyway,
+    so the no-op is correct there.
+
+    Without this, ``raw`` running before ``blastguard`` on the same
+    (seed, task) pair pre-populates llama-server's prompt cache with the
+    shared ``BASE_PROMPT + task prompt`` prefix, inflating BG's
+    ``cached_input_tokens`` relative to a clean-cache world.
+    """
+    import urllib.error  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    root = api_base.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3]
+    try:
+        # llama-swap's /unload is a GET; POST returns 404.
+        urllib.request.urlopen(f"{root}/unload", timeout=10).close()
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        # Expected on non-llama-swap backends. Log at stderr so the operator
+        # can see whether the flush happened without polluting the jsonl.
+        print(f"  (cache flush skipped: {type(e).__name__})", file=sys.stderr)
+
+
 def run_task(
     *,
     task: dict[str, str],
@@ -582,6 +610,10 @@ def main() -> int:
     for seed_idx in range(1, args.seeds + 1):
         for task in selected_tasks:
             for arm in ("raw", "blastguard"):
+                # Clean-cache discipline: each rollout starts from a cold
+                # llama-server KV cache so the `cached_input_tokens` metric
+                # isn't inflated by prior rollouts. See _flush_model_cache.
+                _flush_model_cache(args.api_base)
                 print(f"\n=== task={task['id']} arm={arm} seed={seed_idx} ===")
                 r = run_task(
                     task=task,
