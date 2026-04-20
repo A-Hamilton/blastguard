@@ -240,7 +240,21 @@ fn emit_simple(
         return;
     }
     let body_text = node.utf8_text(src_bytes).unwrap_or("");
-    let signature = name.clone();
+
+    // method_definition nodes carry a `parameters` field; Class / others
+    // don't. Extract params when present so outlines show `add(item)`
+    // instead of bare `add`.
+    let params_text = node
+        .child_by_field_name("parameters")
+        .map(|n| n.utf8_text(src_bytes).unwrap_or("").to_owned())
+        .unwrap_or_default();
+    let signature = if params_text.is_empty() {
+        name.clone()
+    } else {
+        render_signature(&name, &params_text, None)
+    };
+    let is_async = kind == SymbolKind::Method && first_child_text_is(node, source, "async");
+
     let line_start = u32::try_from(node.start_position().row)
         .unwrap_or(u32::MAX)
         .saturating_add(1);
@@ -257,11 +271,11 @@ fn emit_simple(
         line_start,
         line_end,
         signature,
-        params: Vec::new(),
+        params: split_params(&params_text),
         return_type: None,
         visibility: Visibility::Export,
         body_hash: body_hash(body_text),
-        is_async: false,
+        is_async,
         embedding_id: None,
     });
 }
