@@ -200,6 +200,7 @@ pub fn orchestrate(
             summary: format!("Deleted {}", rel.display()),
             warnings: Vec::new(),
             context: BundledContext::default(),
+            diff_snippet: String::new(),
         });
     }
 
@@ -241,15 +242,21 @@ pub fn orchestrate(
     }
 
     // 3. Reparse — if the language is not supported, edit landed but graph is unaffected.
+    let rel_file = file.strip_prefix(project_root).unwrap_or(&file);
     let Some(language) = detect_language(&file) else {
+        let diff_snippet = rollback_source
+            .as_deref()
+            .map(|src| build_diff_snippet(src, &request.changes, rel_file))
+            .unwrap_or_default();
         return Ok(ApplyChangeResponse {
             status: ApplyStatus::Applied,
             summary: format!(
                 "Edited {} (no graph impact — unsupported language)",
-                file.strip_prefix(project_root).unwrap_or(&file).display()
+                rel_file.display()
             ),
             warnings: Vec::new(),
             context: BundledContext::default(),
+            diff_snippet,
         });
     };
     let source = std::fs::read_to_string(&file).map_err(|source| BlastGuardError::Io {
@@ -351,7 +358,6 @@ pub fn orchestrate(
     } else {
         "Modified"
     };
-    let rel_file = file.strip_prefix(project_root).unwrap_or(&file);
     let summary = format!(
         "{} {}. {}.",
         status_word,
@@ -359,17 +365,108 @@ pub fn orchestrate(
         summary_line(&warnings)
     );
 
+    let diff_snippet = rollback_source
+        .as_deref()
+        .map(|src| build_diff_snippet(src, &request.changes, rel_file))
+        .unwrap_or_default();
+
     Ok(ApplyChangeResponse {
         status,
         summary,
         warnings,
         context: context_bundle,
+        diff_snippet,
     })
+}
+
+/// Render a minimal unified diff for the changes applied in a single
+/// `apply_change` call. One block per change, format:
+///
+/// ```text
+/// @@ <rel_file>:L<line> @@
+/// -<old line>
+/// +<new line>
+/// ```
+///
+/// Multi-line `old_text` / `new_text` produce one `-` / `+` line per
+/// source line. The block header anchors on where `old_text` began in
+/// the pre-edit file (1-indexed). A change whose `old_text` is not
+/// found in `pre_edit` is silently skipped — the orchestrator only
+/// reaches this point for changes `apply_edit` already validated, but
+/// defensive skip keeps this helper pure.
+fn build_diff_snippet(
+    pre_edit: &str,
+    changes: &[crate::edit::request::Change],
+    rel_file: &std::path::Path,
+) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    for change in changes {
+        let Some(byte_idx) = pre_edit.find(&change.old_text) else {
+            continue;
+        };
+        let line = pre_edit[..byte_idx].matches('\n').count() + 1;
+        let old_lines: String = change
+            .old_text
+            .lines()
+            .map(|l| format!("-{l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let new_lines: String = change
+            .new_text
+            .lines()
+            .map(|l| format!("+{l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        blocks.push(format!(
+            "@@ {}:L{line} @@\n{old_lines}\n{new_lines}",
+            rel_file.display()
+        ));
+    }
+    blocks.join("\n\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit::request::Change;
+
+    #[test]
+    fn diff_snippet_renders_single_line_change_with_line_anchor() {
+        let pre = "fn foo() { return 1; }\nfn bar() { return 2; }\n";
+        let changes = vec![Change {
+            old_text: "return 2".to_owned(),
+            new_text: "return 42".to_owned(),
+        }];
+        let snippet = build_diff_snippet(pre, &changes, std::path::Path::new("src/a.rs"));
+        assert_eq!(
+            snippet,
+            "@@ src/a.rs:L2 @@\n-return 2\n+return 42"
+        );
+    }
+
+    #[test]
+    fn diff_snippet_renders_multiline_change_with_prefix_per_line() {
+        let pre = "fn foo() {\n    let x = 1;\n    x\n}\n";
+        let changes = vec![Change {
+            old_text: "    let x = 1;\n    x".to_owned(),
+            new_text: "    let x = 2;\n    x + 1".to_owned(),
+        }];
+        let snippet = build_diff_snippet(pre, &changes, std::path::Path::new("a.rs"));
+        assert!(snippet.starts_with("@@ a.rs:L2 @@\n"), "got: {snippet}");
+        assert!(snippet.contains("-    let x = 1;\n-    x"));
+        assert!(snippet.contains("+    let x = 2;\n+    x + 1"));
+    }
+
+    #[test]
+    fn diff_snippet_skips_change_when_old_text_not_found() {
+        let pre = "fn foo() {}\n";
+        let changes = vec![Change {
+            old_text: "nonexistent".to_owned(),
+            new_text: "nope".to_owned(),
+        }];
+        let snippet = build_diff_snippet(pre, &changes, std::path::Path::new("a.rs"));
+        assert_eq!(snippet, "");
+    }
 
     #[test]
     fn apply_edit_exact_single_match_rewrites_file() {

@@ -53,6 +53,12 @@ pub struct ApplyChangeResponse {
     pub warnings: Vec<Warning>,
     /// Pre-fetched follow-up context bundled into the response.
     pub context: BundledContext,
+    /// Per-change minimal unified diff, e.g.
+    /// `"@@ src/a.ts:L12 @@\n-foo\n+bar\n"`. Empty on `Deleted` / `Created`
+    /// status (the summary already names the file). Lets the agent confirm
+    /// the edit landed without re-reading the file.
+    #[serde(default)]
+    pub diff_snippet: String,
 }
 
 /// Top-level status for an applied change. Serialised as `SCREAMING_SNAKE_CASE`
