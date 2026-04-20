@@ -313,7 +313,7 @@ pub fn orchestrate(
         .collect();
     let context_bundle = {
         let g = graph.lock().expect("graph lock poisoned");
-        context::build(&g, &file, &changed_for_context)
+        context::build(&g, &file, &changed_for_context, project_root)
     };
 
     // 8. Session state.

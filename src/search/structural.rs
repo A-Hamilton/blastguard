@@ -95,7 +95,7 @@ pub fn callers_of(
         .unwrap_or(target_file);
     let files_with_function_callers: std::collections::HashSet<std::path::PathBuf> =
         hits.iter().map(|h| h.file.clone()).collect();
-    let importer_hits = importers_of(graph, target_file);
+    let importer_hits = importers_of(graph, target_file, project_root);
     let mut seen_importers: std::collections::HashSet<std::path::PathBuf> =
         std::collections::HashSet::new();
     for hit in &importer_hits {
@@ -205,16 +205,23 @@ pub fn imports_of(
 }
 
 /// `importers of FILE` — files that import `file` (reverse Imports edges).
+/// `project_root` is used to render the target path relative in each hit's
+/// signature.
 #[must_use]
-pub fn importers_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
+pub fn importers_of(
+    graph: &CodeGraph,
+    file: &std::path::Path,
+    project_root: &std::path::Path,
+) -> Vec<SearchHit> {
     let mut hits = Vec::new();
     for rev_edges in graph.reverse_edges.values() {
         for e in rev_edges {
             if e.kind == EdgeKind::Imports && e.to.file == file {
+                let rel = e.to.file.strip_prefix(project_root).unwrap_or(&e.to.file);
                 hits.push(SearchHit {
                     file: e.from.file.clone(),
                     line: e.line,
-                    signature: Some(format!("imports {}", e.to.file.display())),
+                    signature: Some(format!("imports {}", rel.display())),
                     snippet: None,
                 });
             }
@@ -261,8 +268,16 @@ fn is_test_path(path: &std::path::Path) -> bool {
 /// resolve X as a symbol name to its declaring file. Returns importers of
 /// that file whose path is a test path.
 #[must_use]
-pub fn tests_for(graph: &CodeGraph, target: &str) -> Vec<SearchHit> {
+pub fn tests_for(
+    graph: &CodeGraph,
+    target: &str,
+    project_root: &std::path::Path,
+) -> Vec<SearchHit> {
     let target_file = if target.contains('/') || target.contains('\\') {
+        // Use as-is — callers passing a relative query path (e.g.
+        // "src/handler.ts") expect it to match the graph's storage
+        // convention exactly. The dispatcher normalises absolute/relative
+        // query paths before getting here.
         std::path::PathBuf::from(target)
     } else {
         let ids = find_by_name(graph, target);
@@ -274,7 +289,7 @@ pub fn tests_for(graph: &CodeGraph, target: &str) -> Vec<SearchHit> {
         id.file.clone()
     };
 
-    let hits: Vec<SearchHit> = importers_of(graph, &target_file)
+    let hits: Vec<SearchHit> = importers_of(graph, &target_file, project_root)
         .into_iter()
         .filter(|hit| is_test_path(&hit.file))
         .collect();
@@ -668,7 +683,7 @@ mod tests {
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].file, PathBuf::from("b.ts"));
 
-        let importers = importers_of(&g, std::path::Path::new("b.ts"));
+        let importers = importers_of(&g, std::path::Path::new("b.ts"), std::path::Path::new("."));
         assert_eq!(importers.len(), 1);
         assert_eq!(importers[0].file, PathBuf::from("a.ts"));
     }
@@ -706,7 +721,7 @@ mod tests {
                 confidence: Confidence::Certain,
             });
         }
-        let hits = tests_for(&g, "src/handler.ts");
+        let hits = tests_for(&g, "src/handler.ts", std::path::Path::new("."));
         assert_eq!(hits.len(), 1);
         assert!(hits[0].file.to_string_lossy().contains(".test."));
     }
@@ -715,7 +730,7 @@ mod tests {
     fn tests_for_symbol_name_resolves_to_file_first() {
         let mut g = CodeGraph::new();
         g.insert_symbol(sym("processRequest", "src/handler.ts"));
-        let hits = tests_for(&g, "processRequest");
+        let hits = tests_for(&g, "processRequest", std::path::Path::new("."));
         // No importers at all → hint; just verifies it doesn't panic.
         assert_eq!(hits.len(), 1);
         assert!(hits[0]
@@ -750,7 +765,7 @@ mod tests {
             line: 1,
             confidence: Confidence::Certain,
         });
-        let hits = tests_for(&g, "src/handler.ts");
+        let hits = tests_for(&g, "src/handler.ts", std::path::Path::new("."));
         assert_eq!(hits.len(), 1);
         assert!(hits[0].file.to_string_lossy().contains("__tests__"));
     }
@@ -816,7 +831,7 @@ mod tests {
             line: 1,
             confidence: Confidence::Certain,
         });
-        let hits = tests_for(&g, "src/handler.ts");
+        let hits = tests_for(&g, "src/handler.ts", std::path::Path::new("."));
         assert_eq!(hits.len(), 1);
         assert!(hits[0].file.to_string_lossy().contains(".spec."));
     }

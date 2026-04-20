@@ -505,7 +505,9 @@ def _private_helper():
             .filter(|e| e.kind == EdgeKind::Imports)
             .collect();
         assert!(
-            import_edges.iter().any(|e| e.to.file.to_string_lossy() == "os"),
+            import_edges
+                .iter()
+                .any(|e| e.to.file.to_string_lossy() == "os"),
             "expected Imports edge with spec='os'; edges = {import_edges:?}"
         );
         assert!(

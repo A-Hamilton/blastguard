@@ -12,7 +12,12 @@ use crate::search::structural::{callers_of_id, tests_for};
 /// - `callers`: up to 5 per changed symbol, capped at 10 total.
 /// - `tests`: test-path importers of `file`, deduplicated.
 #[must_use]
-pub fn build(graph: &CodeGraph, file: &Path, changed: &[Symbol]) -> BundledContext {
+pub fn build(
+    graph: &CodeGraph,
+    file: &Path,
+    changed: &[Symbol],
+    project_root: &Path,
+) -> BundledContext {
     let mut callers: Vec<String> = Vec::new();
     let per_symbol_cap: usize = 5;
     let total_cap: usize = 10;
@@ -31,7 +36,7 @@ pub fn build(graph: &CodeGraph, file: &Path, changed: &[Symbol]) -> BundledConte
         }
     }
 
-    let tests: Vec<String> = tests_for(graph, &file.to_string_lossy())
+    let tests: Vec<String> = tests_for(graph, &file.to_string_lossy(), project_root)
         .into_iter()
         .filter(|h| !h.is_hint())
         .map(|h| h.file.to_string_lossy().to_string())
@@ -84,7 +89,7 @@ mod tests {
             confidence: Confidence::Certain,
         });
 
-        let ctx = build(&g, Path::new("src/handler.ts"), &[target]);
+        let ctx = build(&g, Path::new("src/handler.ts"), &[target], Path::new("."));
         assert_eq!(ctx.callers.len(), 1);
         assert!(ctx.callers[0].contains("api.ts"));
         assert!(ctx.tests.is_empty());
@@ -117,7 +122,7 @@ mod tests {
         });
 
         let target = sym("handler", "src/handler.ts");
-        let ctx = build(&g, Path::new("src/handler.ts"), &[target]);
+        let ctx = build(&g, Path::new("src/handler.ts"), &[target], Path::new("."));
         assert_eq!(ctx.tests.len(), 1);
         assert!(ctx.tests[0].contains(".test."));
     }

@@ -54,15 +54,32 @@ pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<Sear
             &resolve_query_path(project_root, &path),
             project_root,
         ),
-        QueryKind::ImportersOf(path) => {
-            structural::importers_of(graph, &resolve_query_path(project_root, &path))
-        }
+        QueryKind::ImportersOf(path) => structural::importers_of(
+            graph,
+            &resolve_query_path(project_root, &path),
+            project_root,
+        ),
         QueryKind::ExportsOf(path) => {
             let mut hits = structural::exports_of(graph, &resolve_query_path(project_root, &path));
             hits.truncate(EXPORTS_MAX_HITS);
             hits
         }
-        QueryKind::TestsFor(target) => structural::tests_for(graph, &target),
+        QueryKind::TestsFor(target) => {
+            // Normalise file-path targets against project_root before
+            // handing off (symbol-name targets pass through untouched).
+            let normalised = if target.contains('/') || target.contains('\\') {
+                let raw = PathBuf::from(&target);
+                let full = if raw.is_absolute() {
+                    raw
+                } else {
+                    project_root.join(raw)
+                };
+                full.to_string_lossy().into_owned()
+            } else {
+                target
+            };
+            structural::tests_for(graph, &normalised, project_root)
+        }
         QueryKind::Libraries => {
             let mut hits = structural::libraries(graph);
             hits.truncate(LIBRARIES_MAX_HITS);
