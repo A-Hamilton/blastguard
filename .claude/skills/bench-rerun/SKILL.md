@@ -35,37 +35,64 @@ All steps matter — cutting any one of them produced bad data last time:
 
 ## Run
 
-### Single task (fast feedback)
+### Single task with quality grading (fast feedback)
 
 ```bash
-python bench/microbench.py \
+bench/.venv/bin/python -m bench.microbench \
   --api-base http://127.0.0.1:8080/v1 \
   --api-key-env DUMMY_KEY \
-  --model-id-override gemma-4-27b-it \
+  --model gemma-4 --model-id-override gemma-4 \
   --tasks <task_id> \
   --seeds 3 \
-  --arms raw blastguard \
-  --out bench/runs/$(date +%Y%m%d-%H%M%S)-<task_id>.jsonl
+  --run-judge --judge-n 3 \
+  --output bench/runs/$(date +%Y%m%d-%H%M%S)-<task_id>.jsonl
 ```
 
-Typical tasks: `explore-cold-index`, `chain-search-to-graph`, `find-symbol`, `tests-for-symbol`, `apply-edit-cascade`.
+Typical task IDs: see `bench/tasks_registry.py`. At time of writing:
+`explore-cold-index`, `callers-apply-edit`, `chain-search-to-graph`,
+`cascade-signature-change`, `outline-tree-sitter-rust`,
+`trace-cache-persistence`, `find-tamper-patterns`,
+`impact-of-removing-libraries`, `compare-parse-modules`,
+`tests-for-apply-change`.
 
-### Full suite (slow — 10–20 min)
+### Full suite (slow — 30–60 min)
 
-Drop `--tasks` to run every task in `bench/tasks_registry.py`.
+Drop `--tasks` to run every task. Expect 10 tasks × 2 arms × seeds
+rollouts, plus same-(task, seed) judge calls if `--run-judge` is
+set.
 
 ## Analyse
 
+The microbench harness now prints a priority-ordered summary at
+the end of each run automatically:
+
+- **Priority 1a — deterministic substring grader** (always runs).
+  Per (task, arm) correctness rate, plus a `VERDICT: COMMIT OK`
+  or `DO NOT COMMIT` line. BG must stay within 2pp of raw per
+  task. See `bench/microbench_grader.py`.
+- **Priority 1b — LLM-as-judge pairwise** (when `--run-judge`).
+  Per-(task, seed) winner + per-task BG win rate. Verdicts also
+  written to `<output>.judge.jsonl`. See `bench/microbench_judge.py`.
+- **Priority 2 — tokens.** Summary table shows per-rollout
+  in_tok/out_tok; compare BG medians to raw using
+  `bench/stats_aggregate.py::aggregate_per_cell` on the `.jsonl`.
+  Regression threshold: +10% median input or output tokens.
+- **Priority 3 — wall time.** Reported but weighted down —
+  Gemma's thinking-mode inflates wall ~3× relative to cloud-API
+  behaviour. Don't block commits on wall alone unless P1 or P2
+  are also unfavourable.
+
+For deeper post-hoc analysis:
+
 ```bash
-python bench/stats_aggregate.py bench/runs/<YOUR_RUN>.jsonl
+bench/.venv/bin/python -c "
+from bench.stats_aggregate import load_runs, aggregate_per_cell, arm_totals_with_ci
+from pathlib import Path
+runs = load_runs([Path('bench/runs/<YOUR_RUN>.jsonl')])
+for (t, a), m in sorted(aggregate_per_cell(runs).items()):
+    print(t, a, m)
+"
 ```
-
-Compare against the last committed baseline in `docs/MICROBENCH.md`. Key fields to watch:
-
-- **Input tokens (median)** — should not regress by >10% on any task.
-- **Wall-clock seconds (median)** — the headline efficiency number.
-- **Turn count (median)** — more is OK only if each turn is cheaper.
-- **Paired McNemar's `p` on exit_status=submitted** — needs to be < 0.1 to claim a win.
 
 ## Known pitfalls (from six prior rounds)
 
