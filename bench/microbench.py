@@ -397,13 +397,26 @@ def run_task(
     t0 = time.time()
     turn = 0
 
+    from openai import BadRequestError  # noqa: PLC0415
+
     for turn in range(max_turns):  # noqa: B007 — used for turn-count in result
-        resp = client.chat.completions.create(
-            model=model_id_for_api if model_id_for_api is not None else model,
-            messages=messages,
-            tools=tools,
-            max_tokens=4096,
-        )
+        try:
+            resp = client.chat.completions.create(
+                model=model_id_for_api if model_id_for_api is not None else model,
+                messages=messages,
+                tools=tools,
+                max_tokens=4096,
+            )
+        except BadRequestError as e:
+            # Gemma / llama-server: an assistant "prefill" message (partial
+            # content under thinking-mode) returns 400 mid-rollout. Record
+            # the rollout as stopped instead of crashing the whole multi-
+            # seed job. See bench/KNOWN_GAPS.md Gap 6.
+            msg_text = str(e)
+            if "prefill is incompatible with enable_thinking" in msg_text:
+                stopped_reason = "prefill_thinking_conflict"
+                break
+            raise
         usage = resp.usage
         total_in += getattr(usage, "prompt_tokens", 0) or 0
         total_out += getattr(usage, "completion_tokens", 0) or 0
