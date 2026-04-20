@@ -4,7 +4,7 @@
 //! [`CodeGraph`] and renders hits via [`super::hit::SearchHit::structural`].
 
 use crate::graph::ops::{callees, callers, find_by_name, shortest_path};
-use crate::graph::types::{CodeGraph, EdgeKind, SymbolId};
+use crate::graph::types::{CodeGraph, Confidence, EdgeKind, SymbolId};
 use crate::search::hit::{sort_by_centrality, SearchHit};
 
 /// `find X` / `where is X` — centrality-ranked name lookup with fuzzy fallback.
@@ -213,7 +213,11 @@ pub fn imports_of(
             continue;
         }
         for e in edges {
-            if e.kind == EdgeKind::Imports {
+            // Only surface edges where the resolver pinned a real file. An
+            // unresolved edge's `to.file` is the raw spec text (e.g.
+            // `crate::missing`, `super::*`) — emitting those as hits leaks
+            // parser internals into the agent response.
+            if e.kind == EdgeKind::Imports && e.confidence == Confidence::Certain {
                 let rel = e.to.file.strip_prefix(project_root).unwrap_or(&e.to.file);
                 hits.push(SearchHit {
                     file: e.to.file.clone(),
@@ -244,7 +248,14 @@ pub fn importers_of(
     let mut hits = Vec::new();
     for rev_edges in graph.reverse_edges.values() {
         for e in rev_edges {
-            if e.kind == EdgeKind::Imports && e.to.file == file {
+            // Certain-only: unresolved imports point at the raw spec text
+            // (`crate::missing`, `super::*`, etc.) and would never match
+            // against a real file path anyway, but filter explicitly so
+            // future resolvers don't accidentally leak spec strings.
+            if e.kind == EdgeKind::Imports
+                && e.confidence == Confidence::Certain
+                && e.to.file == file
+            {
                 let rel = e.to.file.strip_prefix(project_root).unwrap_or(&e.to.file);
                 hits.push(SearchHit {
                     file: e.from.file.clone(),
@@ -723,7 +734,7 @@ mod tests {
             to: b_id.clone(),
             kind: EdgeKind::Imports,
             line: 1,
-            confidence: Confidence::Unresolved,
+            confidence: Confidence::Certain,
         });
 
         let imports = imports_of(&g, std::path::Path::new("a.ts"), std::path::Path::new("."));

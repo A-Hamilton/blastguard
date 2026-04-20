@@ -80,6 +80,10 @@ impl SearchHit {
             |p| p.display().to_string(),
         );
         let body = match (self.signature.as_deref(), self.snippet.as_deref()) {
+            // Hint hits carry human-readable messages, not Rust signatures —
+            // skip compact_signature (which strips lifetime-like tokens and
+            // eats content inside single quotes, e.g. `'test_foo'`).
+            (Some(sig), _) if self.is_hint() => sig.to_string(),
             (Some(sig), _) => compact_signature(sig),
             (None, Some(snippet)) => snippet.trim().to_string(),
             (None, None) => String::new(),
