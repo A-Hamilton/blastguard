@@ -181,6 +181,21 @@ All four must pass with zero warnings before saying "done". If tests are slow (>
 
 Benchmark harness runs are a separate, opt-in verification gate at the end of Phase 1 — not on every change.
 
+## Measuring Success (priority-ordered)
+
+Three metric tiers, strictly ordered. A lower-tier win does not compensate for a higher-tier regression.
+
+1. **Quality (blocker).** BG correctness rate must stay within 2pp of the raw arm per task.
+   - Priority 1a: `bench/microbench_grader.py` — deterministic substring grading against `expected_substrings` on each task in `bench/tasks_registry.py`. Runs automatically after every `microbench.py` batch. `regression_verdict(cells, tolerance_pp=2.0)` → `COMMIT OK` or `DO NOT COMMIT`.
+   - Priority 1b: `bench/microbench_judge.py` — LLM-as-judge blind-pairwise on three axes (correctness / substance / conciseness). Opt-in via `microbench.py --run-judge --judge-n 3`. Mitigates substring-matching's blindness to hallucination and fluency differences. Writes `<output>.judge.jsonl` next to the rollout log.
+2. **Tokens.** Input and output median deltas via `bench/stats_aggregate.py`. Regression threshold: +10% on either axis.
+3. **Speed.** Wall seconds reported but weighted down — Gemma's thinking-mode inflates wall ~3× vs cloud-API behaviour. Flag only when Priorities 1–2 also regress.
+
+Automation wired in `.claude/`:
+- Skill `probe-live` (user-only, `disable-model-invocation: true`) — seeds a tempdir fixture for a named scenario (e.g. `python-relative`, `tsx-arrow-consts`, `rust-siblings`), cold-indexes via the release binary over stdio, prints hits. ~15 correctness bugs in the April 2026 session were found this way.
+- Subagent `parser-query-reviewer` — fires on `queries/*.scm` or `src/parse/*.rs` diffs; checks node-type names against the grammar, capture-name routing, and predicate scoping.
+- Subagent `bench-regression-guard` — reads the grader + judge output, blocks commits that violate the priority rules above.
+
 ## Git & Commit Discipline
 
 - Commit only when the user asks.
