@@ -346,3 +346,93 @@ bench/.venv/bin/python -m bench.microbench \
 ```
 
 Total optimization spend (rounds 3-6): **~$0.26**.
+
+## Round 8 — pipeline verification (single seed, single judge call)
+
+Scope: 1 task × 1 seed × 1 judge call. Not a measurement round —
+purpose was to verify the priority-ordered quality pipeline
+(grader + judge) lands results end-to-end on real Gemma output.
+Commits measured: cumulative session through `43262b8` (resolver
+chain + 16 parser/resolver correctness fixes + kind-correction
+fix for method dispatch + the quality framework).
+
+|                        | raw        | blastguard | Δ       |
+|------------------------|-----------:|-----------:|--------:|
+| input tokens           | 89,220     | 53,849     | **−40%** |
+| wall seconds           | 156.3      | 137.6      | −12%    |
+| turns                  | 10         | 20         | +100%   |
+| correctness (grader)   | 1/1        | 1/1        | tie     |
+| judge winner           | —          | —          | **raw** |
+
+### Priority 1a — deterministic grader: `COMMIT OK`
+
+Both arms passed the substring check (`search_tool`, `dispatch`,
+`structural`). The grader is doing its job.
+
+### Priority 1b — LLM-as-judge: raw wins
+
+The judge caught a quality gap the substring grader missed. Task
+asked "name each function in order." Raw complied with a specific
+function (`structural.rs:find (and other structural functions
+like callers_of, callee_of, etc.)`). BG abstracted to "routes to
+specific graph-backed implementations in the `src/search/structural`
+module" — vaguer, doesn't name the final function.
+
+Judge reasoning (correctness axis): *"Both answers identify the
+same initial steps, but Answer A provides a specific function name
+for the final step in the chain, whereas Answer B only describes
+the routing process."*
+
+**Interpretation:** the `BLASTGUARD_BIAS` prompt's aggressive
+"answer as soon as you have enough" rule plus the `STOP CONDITION`
+block may be over-indexing BG on brevity at the cost of
+specificity. This is a real-quality finding that substring matching
+alone would have missed — the judge pipeline is doing what it's
+supposed to.
+
+**Caveat:** n_judges=1 means the verdict depends on one random
+A/B assignment (raw landed in slot A here). n_judges=3 at minimum
+for any real measurement.
+
+### Priority 2 — tokens: BG wins decisively
+
+BG saved 40% on input tokens and 31% on output tokens. Raw's
+extra tokens came from six `read_file` calls that BG substituted
+with nine `blastguard_search` calls. The token economics favour BG
+even though raw picked a slightly better answer this time.
+
+### Priority 3 — speed: BG wins slightly
+
+−12% wall time — a notable reversal from round 7's +379%. Could
+be the cumulative effect of the kind-correction + prompt tighten +
+DONE-emission clarity, or Gemma variance at n=1. Can't attribute
+without a multi-seed re-run.
+
+### What round 8 verified
+
+- Pipeline lands results end-to-end on real Gemma output.
+- Judge's JSON parser handles real Gemma responses without needing
+  the preamble-fallback regex.
+- `.jsonl` + `.judge.jsonl` both land on disk correctly.
+- Priority-ordered summary renders in the expected order.
+- Grader and judge produce auditable outputs.
+
+### What round 8 does NOT establish
+
+- Whether BG's terseness-vs-specificity trade-off is systematic
+  or just this task. Need n=3+ seeds × multiple tasks.
+- Whether the wall-time reversal is real or variance.
+- Whether the BG prompt should be loosened to preserve specificity.
+  Hypothesis: yes — but hold until a multi-task measurement confirms
+  the trade-off is systematic. Changing the prompt based on one
+  data point would be p-hacking.
+
+### Next measurement round (blocked pending user decision)
+
+Proposal: run all 10 tasks × 1 seed × 3 judges (~45 min Gemma time)
+to get a first real quality-gated comparison across the task set.
+If BG wins the judge on ≥6/10 tasks, the terseness concern is task-
+specific. If BG loses ≥4/10 tasks on the judge, loosen the
+BLASTGUARD_BIAS efficiency rules to preserve specificity.
+
+Pipeline commands in `.claude/skills/bench-rerun/SKILL.md`.
