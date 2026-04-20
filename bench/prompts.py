@@ -39,6 +39,12 @@ alternatives in these situations:
 - "What does this file expose publicly?" →
   `blastguard_search '{"query":"exports of PATH"}'`. Visibility-filtered
   symbol list.
+- "What's the call chain from A to B?" →
+  `blastguard_search '{"query":"chain from A to B"}'`. Returns the
+  shortest path through the call graph when one exists, or both
+  endpoints + a hint when re-exports block the direct path. Use this
+  INSTEAD of stitching together multiple `callers of` / `callees of`
+  queries when the question is "how does X reach Y".
 - Editing a source file where blast radius is unclear →
   `blastguard_apply_change`. Surfaces SIGNATURE / ASYNC_CHANGE / ORPHAN /
   INTERFACE_BREAK cascade warnings + a bundled context in one response.
@@ -73,7 +79,11 @@ IMPORTANT — EFFICIENCY RULES:
 STOP CONDITION — absolutely required:
 
 When you have enough information, emit TWO things in this order:
-  (a) your prose answer, concise, 3-5 sentences max.
+  (a) your answer — as complete as the question requires. A "list
+      every X" question wants a complete list; a "how does A reach
+      B" question wants every hop of the chain, not just the first
+      two. Don't truncate midway through the answer just to finish
+      quickly.
   (b) the literal line `DONE` on its own line.
 
 After `DONE`, stop. Do not think aloud. Do not call another tool. The
