@@ -27,11 +27,19 @@ pub fn callees<'g>(graph: &'g CodeGraph, target: &SymbolId) -> Vec<&'g SymbolId>
         .unwrap_or_default()
 }
 
-/// BFS shortest path from `from` to `to`, following forward edges. `None`
-/// when unreachable. Returns the chain of symbols in order.
+/// BFS shortest path from `from` to any node matching `pred`, following
+/// forward edges. `None` when unreachable. Returns the chain of symbols in
+/// order, terminating at the first node for which `pred(id)` is true.
 #[must_use]
-pub fn shortest_path(graph: &CodeGraph, from: &SymbolId, to: &SymbolId) -> Option<Vec<SymbolId>> {
-    if from == to {
+pub fn shortest_path_to_predicate<F>(
+    graph: &CodeGraph,
+    from: &SymbolId,
+    pred: F,
+) -> Option<Vec<SymbolId>>
+where
+    F: Fn(&SymbolId) -> bool,
+{
+    if pred(from) {
         return Some(vec![from.clone()]);
     }
     let mut queue: VecDeque<SymbolId> = VecDeque::new();
@@ -48,9 +56,9 @@ pub fn shortest_path(graph: &CodeGraph, from: &SymbolId, to: &SymbolId) -> Optio
         for edge in edges {
             if visited.insert(edge.to.clone()) {
                 parent.insert(edge.to.clone(), current.clone());
-                if &edge.to == to {
-                    let mut path = vec![to.clone()];
-                    let mut node = to.clone();
+                if pred(&edge.to) {
+                    let mut path = vec![edge.to.clone()];
+                    let mut node = edge.to.clone();
                     while let Some(p) = parent.get(&node) {
                         path.push(p.clone());
                         if p == from {
@@ -66,6 +74,13 @@ pub fn shortest_path(graph: &CodeGraph, from: &SymbolId, to: &SymbolId) -> Optio
         }
     }
     None
+}
+
+/// BFS shortest path from `from` to `to`, following forward edges. `None`
+/// when unreachable. Returns the chain of symbols in order.
+#[must_use]
+pub fn shortest_path(graph: &CodeGraph, from: &SymbolId, to: &SymbolId) -> Option<Vec<SymbolId>> {
+    shortest_path_to_predicate(graph, from, |id| id == to)
 }
 
 /// Centrality-sorted list of symbols matching `name` (exact match first,
@@ -193,5 +208,34 @@ mod tests {
         g.insert_symbol(near.clone());
         let hits = find_by_name(&g, "process");
         assert_eq!(hits, vec![&near.id]);
+    }
+
+    #[test]
+    fn shortest_path_to_predicate_walks_forward_edges() {
+        let mut g = CodeGraph::new();
+        let a = mk("a", "x.ts");
+        let b = mk("b", "x.ts");
+        let c = mk("c", "y.ts");
+        g.insert_symbol(a.clone());
+        g.insert_symbol(b.clone());
+        g.insert_symbol(c.clone());
+        connect(&mut g, &a, &b);
+        connect(&mut g, &b, &c);
+        let path = shortest_path_to_predicate(&g, &a.id, |id| id.file == std::path::Path::new("y.ts"))
+            .expect("reachable");
+        assert_eq!(path.len(), 3);
+        assert_eq!(path[0], a.id);
+        assert_eq!(path[2], c.id);
+    }
+
+    #[test]
+    fn shortest_path_to_predicate_none_when_no_node_matches() {
+        let mut g = CodeGraph::new();
+        let a = mk("a", "x.ts");
+        let b = mk("b", "x.ts");
+        g.insert_symbol(a.clone());
+        g.insert_symbol(b.clone());
+        connect(&mut g, &a, &b);
+        assert!(shortest_path_to_predicate(&g, &a.id, |_| false).is_none());
     }
 }
