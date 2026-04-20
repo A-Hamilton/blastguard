@@ -293,4 +293,56 @@ expand the task set before more Rust-side tuning, not less.
 | 5  | Empty-hit hints (regressed)                        | $0.0305 | 17 |  86,896 | 7 | +39% |
 | 6  | Compact fmt + relative paths + caps + dedup        | $0.0269 | 17 |  74,321 | 7 | +23% vs r4, **-33% vs r2** |
 
+## Round 7 — cross-file resolution landed; single-task re-run
+
+Scope: 3 seeds on `chain-search-to-graph` only (used new `--tasks` flag
+added to `bench/microbench.py`). Commits measured: `7fc297e` through
+`1d5e9c6` — resolve_imports, resolve_calls, cross-file cascade
+warnings, restitch_reverse_edges_for_file, path-normalisation cleanup.
+
+|                        | raw (mean) | blastguard (mean) | Δ       |
+|------------------------|-----------:|------------------:|--------:|
+| input tokens           | 56,487     | 37,075            | −34%    |
+| wall seconds           | 139        | 665               | **+379%**  |
+| turns                  | 7.67       | 11.00             | +43%    |
+| `done_marker` rate     | 3/3        | 1/3               | regression |
+| answer correctness     | 3/3        | 3/3               | equivalent |
+
+**Honest read:** mixed result. The resolver chain works — all 6
+rollouts identified the correct call chain
+(`server.rs::search_tool → dispatcher::dispatch → structural.rs`).
+Input tokens improved slightly over round 6's baseline. Turns dropped
+(+43% vs round 4's +71% — cross-file resolution is reducing
+wandering). BUT wall time regressed catastrophically (+379% vs
+round 4's −88%).
+
+**Why wall time regressed:** richer BG responses (cross-file importer
++ first-class callers + bundled context) trigger more `reasoning_content`
+on Gemma's thinking-mode path, inflating per-turn latency ~3×. This is
+a *local Gemma 26B thinking-mode pathology*, not a correctness issue.
+On Opus/Sonnet without thinking overhead, the −34% input tokens should
+translate directly to a cost AND wall-time win.
+
+**Why 2/3 BG runs stopped at `finish_stop`:** agent reached the correct
+answer but didn't cleanly emit DONE. Worth tightening the efficiency
+rules in `bench/prompts.py::BLASTGUARD_BIAS` with a stronger
+"answer-as-soon-as-you-have-enough" push.
+
+**Do not cite this as a win.** Per the `bench-regression-guard`
+discipline, a wall-time regression blocks a new headline claim even
+when tokens improve. Re-measure on a cloud API (or a non-thinking-mode
+local model) before updating the README.
+
+### Replication
+
+```bash
+bench/.venv/bin/python -m bench.microbench \
+  --api-base http://127.0.0.1:8080/v1 \
+  --api-key-env DUMMY_KEY \
+  --model gemma-4 --model-id-override gemma-4 \
+  --tasks chain-search-to-graph \
+  --seeds 3 \
+  --output bench/runs/$(date +%Y%m%d-%H%M%S)-chain-search.jsonl
+```
+
 Total optimization spend (rounds 3-6): **~$0.26**.

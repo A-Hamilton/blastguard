@@ -523,7 +523,26 @@ def main() -> int:
              "the --model value in the output log. Use when the local endpoint expects "
              "a short ID (e.g. 'gemma-4') but you want the log tagged with the full name.",
     )
+    p.add_argument(
+        "--tasks",
+        default=None,
+        help="Comma-separated list of task IDs to run (e.g. 'chain-search-to-graph'). "
+             "Defaults to all tasks in tasks_registry.py.",
+    )
     args = p.parse_args()
+
+    if args.tasks is None:
+        selected_tasks = TASKS
+    else:
+        wanted = {t.strip() for t in args.tasks.split(",") if t.strip()}
+        selected_tasks = [t for t in TASKS if t["id"] in wanted]
+        missing = wanted - {t["id"] for t in selected_tasks}
+        if missing:
+            print(f"ERROR: unknown task id(s): {sorted(missing)}", file=sys.stderr)
+            return 2
+        if not selected_tasks:
+            print("ERROR: --tasks matched no tasks", file=sys.stderr)
+            return 2
 
     if args.api_key_env not in os.environ:
         print(f"ERROR: {args.api_key_env} not set", file=sys.stderr)
@@ -533,7 +552,7 @@ def main() -> int:
     results: list[RunResult] = []
 
     for seed_idx in range(1, args.seeds + 1):
-        for task in TASKS:
+        for task in selected_tasks:
             for arm in ("raw", "blastguard"):
                 print(f"\n=== task={task['id']} arm={arm} seed={seed_idx} ===")
                 r = run_task(
