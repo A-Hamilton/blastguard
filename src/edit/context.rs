@@ -25,9 +25,10 @@ pub fn build(
     'outer: for sym in changed {
         let hits = callers_of_id(graph, &sym.id, per_symbol_cap);
         for hit in hits {
+            let rel = hit.file.strip_prefix(project_root).unwrap_or(&hit.file);
             let line_str = match hit.signature.as_deref() {
-                Some(sig) => format!("{}:{} — {}", hit.file.display(), hit.line, sig),
-                None => format!("{}:{}", hit.file.display(), hit.line),
+                Some(sig) => format!("{}:{} — {}", rel.display(), hit.line, sig),
+                None => format!("{}:{}", rel.display(), hit.line),
             };
             callers.push(line_str);
             if callers.len() >= total_cap {
@@ -39,7 +40,10 @@ pub fn build(
     let tests: Vec<String> = tests_for(graph, &file.to_string_lossy(), project_root)
         .into_iter()
         .filter(|h| !h.is_hint())
-        .map(|h| h.file.to_string_lossy().to_string())
+        .map(|h| {
+            let rel = h.file.strip_prefix(project_root).unwrap_or(&h.file);
+            rel.to_string_lossy().to_string()
+        })
         .collect::<std::collections::BTreeSet<String>>()
         .into_iter()
         .collect();

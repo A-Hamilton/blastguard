@@ -164,9 +164,13 @@ pub fn orchestrate(
         };
         let mut resp = orchestrate(graph, session, project_root, &inner)?;
         resp.status = ApplyStatus::Created;
+        let rel = request
+            .file
+            .strip_prefix(project_root)
+            .unwrap_or(&request.file);
         resp.summary = format!(
             "Created {}. {}.",
-            request.file.display(),
+            rel.display(),
             summary_line(&resp.warnings)
         );
         return Ok(resp);
@@ -186,9 +190,13 @@ pub fn orchestrate(
             let mut s = session.lock().expect("session lock poisoned");
             s.record_file_edit(&request.file);
         }
+        let rel = request
+            .file
+            .strip_prefix(project_root)
+            .unwrap_or(&request.file);
         return Ok(ApplyChangeResponse {
             status: ApplyStatus::Deleted,
-            summary: format!("Deleted {}", request.file.display()),
+            summary: format!("Deleted {}", rel.display()),
             warnings: Vec::new(),
             context: BundledContext::default(),
         });
@@ -237,7 +245,7 @@ pub fn orchestrate(
             status: ApplyStatus::Applied,
             summary: format!(
                 "Edited {} (no graph impact — unsupported language)",
-                file.display()
+                file.strip_prefix(project_root).unwrap_or(&file).display()
             ),
             warnings: Vec::new(),
             context: BundledContext::default(),
@@ -287,18 +295,18 @@ pub fn orchestrate(
     {
         let g = graph.lock().expect("graph lock poisoned");
         for (old, new) in &d.modified_sig {
-            if let Some(w) = detect_signature(&g, old, new) {
+            if let Some(w) = detect_signature(&g, old, new, project_root) {
                 warnings.push(w);
             }
             if let Some(w) = detect_async_change(&g, old, new) {
                 warnings.push(w);
             }
-            if let Some(w) = detect_interface_break(&g, old, new) {
+            if let Some(w) = detect_interface_break(&g, old, new, project_root) {
                 warnings.push(w);
             }
         }
         for removed in &d.removed {
-            if let Some(w) = detect_orphan(&g, removed) {
+            if let Some(w) = detect_orphan(&g, removed, project_root) {
                 warnings.push(w);
             }
         }
@@ -342,10 +350,11 @@ pub fn orchestrate(
     } else {
         "Modified"
     };
+    let rel_file = file.strip_prefix(project_root).unwrap_or(&file);
     let summary = format!(
         "{} {}. {}.",
         status_word,
-        file.display(),
+        rel_file.display(),
         summary_line(&warnings)
     );
 

@@ -7,8 +7,18 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use std::path::Path;
+
 use crate::graph::ops::callers;
 use crate::graph::types::{CodeGraph, EdgeKind, Symbol, SymbolId, SymbolKind};
+
+/// Render `id` as `<rel_path>:<name>`, stripping `project_root` when possible.
+/// Keeps warning bodies short so the 200-char [`Warning::clamp`] cap leaves
+/// room for actual content instead of repeated tempdir prefixes.
+fn render_id(id: &SymbolId, project_root: &Path) -> String {
+    let rel = id.file.strip_prefix(project_root).unwrap_or(&id.file);
+    format!("{}:{}", rel.display(), id.name)
+}
 
 /// Cascade warning kind. Serialised as an uppercase tag in the MCP response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -66,7 +76,12 @@ impl Warning {
 /// Fires when the modified symbol has ≥ 1 caller; body lists up to 10
 /// caller `file:name` pairs.
 #[must_use]
-pub fn detect_signature(graph: &CodeGraph, _old: &Symbol, new: &Symbol) -> Option<Warning> {
+pub fn detect_signature(
+    graph: &CodeGraph,
+    _old: &Symbol,
+    new: &Symbol,
+    project_root: &Path,
+) -> Option<Warning> {
     let caller_ids = find_callers_by_name(graph, new);
     if caller_ids.is_empty() {
         return None;
@@ -75,7 +90,7 @@ pub fn detect_signature(graph: &CodeGraph, _old: &Symbol, new: &Symbol) -> Optio
     let shown: Vec<String> = caller_ids
         .iter()
         .take(10)
-        .map(|id| format!("{}:{}", id.file.display(), id.name))
+        .map(|id| render_id(id, project_root))
         .collect();
     let more = if total > 10 {
         format!(" …and {} more ({} total)", total - 10, total)
@@ -144,7 +159,11 @@ pub fn detect_async_change(graph: &CodeGraph, old: &Symbol, new: &Symbol) -> Opt
 /// removed symbol's id. Plan 1's `remove_file` preserves these dangling
 /// edges for exactly this detection path.
 #[must_use]
-pub fn detect_orphan(graph: &CodeGraph, removed: &Symbol) -> Option<Warning> {
+pub fn detect_orphan(
+    graph: &CodeGraph,
+    removed: &Symbol,
+    project_root: &Path,
+) -> Option<Warning> {
     let dangling: Vec<&SymbolId> = graph
         .forward_edges
         .iter()
@@ -159,7 +178,7 @@ pub fn detect_orphan(graph: &CodeGraph, removed: &Symbol) -> Option<Warning> {
     let shown: Vec<String> = dangling
         .iter()
         .take(10)
-        .map(|id| format!("{}:{}", id.file.display(), id.name))
+        .map(|id| render_id(id, project_root))
         .collect();
     let body = format!(
         "{}() removed but {} caller{} still reference it: {}",
@@ -192,7 +211,12 @@ pub fn summary_line(warnings: &[Warning]) -> String {
 /// `INTERFACE_BREAK` — a TS interface or Rust trait's signature changed.
 /// Lists implementing classes/structs via reverse `Implements` edges.
 #[must_use]
-pub fn detect_interface_break(graph: &CodeGraph, old: &Symbol, new: &Symbol) -> Option<Warning> {
+pub fn detect_interface_break(
+    graph: &CodeGraph,
+    old: &Symbol,
+    new: &Symbol,
+    project_root: &Path,
+) -> Option<Warning> {
     if !matches!(new.id.kind, SymbolKind::Interface | SymbolKind::Trait) {
         return None;
     }
@@ -214,7 +238,7 @@ pub fn detect_interface_break(graph: &CodeGraph, old: &Symbol, new: &Symbol) -> 
     let shown: Vec<String> = implementors
         .iter()
         .take(10)
-        .map(|id| format!("{}:{}", id.file.display(), id.name))
+        .map(|id| render_id(id, project_root))
         .collect();
     let body = format!(
         "{} contract changed. {} impl{} may violate: {}",
@@ -357,7 +381,7 @@ mod detector_tests {
         let mut new = target.clone();
         new.signature = "processRequest(req, res, next)".to_string();
 
-        let warning = detect_signature(&g, &old, &new).expect("should fire");
+        let warning = detect_signature(&g, &old, &new, std::path::Path::new(".")).expect("should fire");
         assert_eq!(warning.kind, WarningKind::Signature);
         assert!(
             warning.body.contains("processRequest"),
@@ -375,7 +399,7 @@ mod detector_tests {
         g.insert_symbol(target.clone());
         let mut new = target.clone();
         new.signature = "lonely(x)".to_string();
-        assert!(detect_signature(&g, &target, &new).is_none());
+        assert!(detect_signature(&g, &target, &new, std::path::Path::new(".")).is_none());
     }
 
     // --- Task 7: ASYNC_CHANGE ---
@@ -423,7 +447,7 @@ mod detector_tests {
         // the caller's forward edge dangling (Plan 1 Task 0 fix).
         g.remove_file(std::path::Path::new("h.ts"));
 
-        let warning = detect_orphan(&g, &target).expect("should fire");
+        let warning = detect_orphan(&g, &target, std::path::Path::new(".")).expect("should fire");
         assert_eq!(warning.kind, WarningKind::Orphan);
         assert!(warning.body.contains("gone"));
         assert!(warning.body.contains("1 caller"));
@@ -435,7 +459,7 @@ mod detector_tests {
         let target = sym("gone", "h.ts");
         g.insert_symbol(target.clone());
         g.remove_file(std::path::Path::new("h.ts"));
-        assert!(detect_orphan(&g, &target).is_none());
+        assert!(detect_orphan(&g, &target, std::path::Path::new(".")).is_none());
     }
 
     // --- Task 9: INTERFACE_BREAK ---
@@ -461,7 +485,7 @@ mod detector_tests {
         let mut new = iface.clone();
         new.signature = "interface Greeter { greet(name: string): string }".to_string();
 
-        let warning = detect_interface_break(&g, &old, &new).expect("should fire");
+        let warning = detect_interface_break(&g, &old, &new, std::path::Path::new(".")).expect("should fire");
         assert_eq!(warning.kind, WarningKind::InterfaceBreak);
         assert!(warning.body.contains("Greeter"));
         assert!(warning.body.contains("EnglishGreeter") || warning.body.contains("1 impl"));
@@ -472,6 +496,6 @@ mod detector_tests {
         let mut g = CodeGraph::new();
         let f = sym("foo", "f.ts");
         g.insert_symbol(f.clone());
-        assert!(detect_interface_break(&g, &f, &f).is_none());
+        assert!(detect_interface_break(&g, &f, &f, std::path::Path::new(".")).is_none());
     }
 }
