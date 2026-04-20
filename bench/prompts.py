@@ -42,9 +42,13 @@ alternatives in these situations:
 - "What's the call chain from A to B?" →
   `blastguard_search '{"query":"chain from A to B"}'`. Returns the
   shortest path through the call graph when one exists, or both
-  endpoints + a hint when re-exports block the direct path. Use this
-  INSTEAD of stitching together multiple `callers of` / `callees of`
-  queries when the question is "how does X reach Y".
+  endpoints + a hint when re-exports block the direct path. `B` may
+  also be a file path (e.g. `src/search/structural.rs`) — BlastGuard
+  walks to the first symbol in that file and includes sibling callees
+  in one response, so you don't need to guess the exact function name
+  when you know the target module. Use this INSTEAD of stitching
+  together multiple `callers of` / `callees of` queries when the
+  question is "how does X reach Y".
 - Editing a source file where blast radius is unclear →
   `blastguard_apply_change`. Surfaces SIGNATURE / ASYNC_CHANGE / ORPHAN /
   INTERFACE_BREAK cascade warnings + a bundled context in one response.
