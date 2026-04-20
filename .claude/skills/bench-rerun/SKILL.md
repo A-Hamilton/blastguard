@@ -33,7 +33,12 @@ All steps matter — cutting any one of them produced bad data last time:
 
 4. **Confirm llama-swap's TTL is ≥ 7200s.** Default 300s causes mid-run connection refused errors on multi-task suites. Check `~/.config/llama-swap/config.yaml` — both `globalTTL` and the Gemma model's `ttl:` must be 7200.
 
-5. **Context window vs VRAM — `-c 16384` is the sweet spot for 17GB cards.** `-c 32768` pushed a Q4_K_M 26B A4B model to the edge of a 17GB GPU in round 9, causing intermittent silent OOM hangs (llama-server evicted mid-rollout, llama-swap's reload-on-demand stalled, Python hung on the HTTP call). BlastGuard rollouts don't need 32K — round-8 peak per-turn input was ~9K tokens, so 16K leaves ~2× headroom. If the card is ≥24GB, `-c 32768` is fine.
+5. **Context window vs VRAM — `-c 32768` is the working size on 17GB cards ONLY when KV-quant is on (see step 6).** History:
+   - Round 9 attempt 1 crashed at `-c 32768` WITHOUT KV-quant (kernel OOM, not VRAM).
+   - Rounds 9–11 ran at `-c 16384` with KV-quant on — stable but tight.
+   - Round 12 raw arm hit a context-overflow 400 at `-c 16384` when `read_file` dumped a long source file (26446-token request vs 16384-token ctx), mid-rollout. With KV-quant on, `-c 32768` fits comfortably (VRAM peaked ~10GB of 17GB during that round).
+   - **Current recommendation for 17GB cards: `-c 32768` + `-ctk q4_0 -ctv q4_0`.** Don't go to `-c 32768` without the KV-quant — round-9's OOM will return.
+   - If the card is ≥24GB, `-c 32768` is fine with or without KV-quant.
 
 6. **KV cache quantization is the single biggest RAM win** when combined with `--n-cpu-moe N`. Add `-ctk q4_0 -ctv q4_0` to llama-swap's Gemma command. Measured impact on round 9's first failure: RAM usage 18 GB → **5.8 GB** (−12 GB), swap 17 GB → **3.3 GB** (−14 GB), throughput −3 tok/s (negligible). Without this, `--n-cpu-moe 20` drives the system deep into swap, kernel OOM killer fires on llama-server. The fix is in `~/.config/llama-swap/config.yaml`:
 
@@ -42,7 +47,7 @@ All steps matter — cutting any one of them produced bad data last time:
      /usr/bin/llama-server
      -hf ggml-org/gemma-4-26B-A4B-it-GGUF
      -hff gemma-4-26B-A4B-it-Q4_K_M.gguf
-     -ngl 99 --n-cpu-moe 20 -c 16384 -fa on
+     -ngl 99 --n-cpu-moe 20 -c 32768 -fa on
      -ctk q4_0 -ctv q4_0         # <-- KV cache quantization
      --host 127.0.0.1 --port ${PORT}
      --jinja
