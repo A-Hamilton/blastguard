@@ -81,7 +81,7 @@ pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<Sear
             structural::tests_for(graph, &normalised, project_root)
         }
         QueryKind::Libraries => {
-            let mut hits = structural::libraries(graph);
+            let mut hits = structural::libraries(graph, project_root);
             hits.truncate(LIBRARIES_MAX_HITS);
             hits
         }

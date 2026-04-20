@@ -271,11 +271,25 @@ pub fn importers_of(
 
 /// `libraries` — external imports grouped by library name with use counts.
 /// Returns results sorted alphabetically by library name (`BTreeMap` iteration).
+///
+/// Filters out names that correspond to project-internal packages:
+/// - top-level subdirectories under `project_root` (e.g. `bench/` in a
+///   mixed Rust+Python repo would otherwise show up as "bench library")
+/// - the crate's own name from `Cargo.toml` (when present) — integration
+///   tests doing `use blastguard::*` would otherwise self-report as an
+///   external dependency
+///
+/// Both filters are silent — internal imports are not misclassified, they
+/// just don't appear in the `libraries` output.
 #[must_use]
-pub fn libraries(graph: &CodeGraph) -> Vec<SearchHit> {
+pub fn libraries(graph: &CodeGraph, project_root: &std::path::Path) -> Vec<SearchHit> {
     use std::collections::BTreeMap;
+    let own_crate_name = read_cargo_package_name(project_root);
     let mut counts: BTreeMap<&str, u32> = BTreeMap::new();
     for li in &graph.library_imports {
+        if is_internal_package(&li.library, project_root, own_crate_name.as_deref()) {
+            continue;
+        }
         *counts.entry(li.library.as_str()).or_insert(0) += 1;
     }
     counts
@@ -287,6 +301,31 @@ pub fn libraries(graph: &CodeGraph) -> Vec<SearchHit> {
             snippet: None,
         })
         .collect()
+}
+
+fn is_internal_package(
+    library: &str,
+    project_root: &std::path::Path,
+    own_crate_name: Option<&str>,
+) -> bool {
+    if own_crate_name == Some(library) {
+        return true;
+    }
+    project_root.join(library).is_dir()
+}
+
+/// Best-effort read of `[package].name` from `Cargo.toml` at `project_root`.
+/// Returns `None` when the file is missing, unreadable, or malformed —
+/// callers treat the absence as "no crate-name filter".
+fn read_cargo_package_name(project_root: &std::path::Path) -> Option<String> {
+    let manifest = project_root.join("Cargo.toml");
+    let body = std::fs::read_to_string(&manifest).ok()?;
+    let parsed: toml::Value = toml::from_str(&body).ok()?;
+    parsed
+        .get("package")?
+        .get("name")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// Heuristic: a path is a "test path" if any component contains `.test.`,
@@ -1040,12 +1079,46 @@ mod tests {
                 line,
             });
         }
-        let hits = libraries(&g);
+        let hits = libraries(&g, std::path::Path::new("/nonexistent-for-filter"));
         assert_eq!(hits.len(), 3);
         let lodash_hit = hits
             .iter()
             .find(|h| h.signature.as_deref().is_some_and(|s| s.contains("lodash")))
             .expect("lodash missing");
         assert!(lodash_hit.signature.as_deref().unwrap().contains("2 uses"));
+    }
+
+    #[test]
+    fn libraries_filters_project_internal_packages() {
+        use crate::graph::types::LibraryImport;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("bench")).expect("mkdir bench");
+        // Write a Cargo.toml so the crate-name filter also kicks in.
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"myproj\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        )
+        .expect("write Cargo.toml");
+
+        let mut g = CodeGraph::new();
+        for (lib, file) in [
+            ("tokio", "src/a.rs"),
+            ("bench", "bench/x.py"),    // internal subdir → filtered
+            ("myproj", "tests/t.rs"),   // own crate name → filtered
+            ("anyhow", "src/b.rs"),
+        ] {
+            g.library_imports.push(LibraryImport {
+                library: lib.to_string(),
+                symbol: String::new(),
+                file: std::path::PathBuf::from(file),
+                line: 1,
+            });
+        }
+        let hits = libraries(&g, tmp.path());
+        let names: Vec<_> = hits
+            .iter()
+            .filter_map(|h| h.signature.as_deref().and_then(|s| s.split_whitespace().next()))
+            .collect();
+        assert_eq!(names, vec!["anyhow", "tokio"], "got: {names:?}");
     }
 }

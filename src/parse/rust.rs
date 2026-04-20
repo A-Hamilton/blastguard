@@ -226,13 +226,14 @@ fn emit_use(path_text: &str, node: tree_sitter::Node<'_>, path: &Path, out: &mut
         .unwrap_or(u32::MAX)
         .saturating_add(1);
 
+    let module_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_owned();
+
     match head {
         "crate" | "self" | "super" => {
-            let module_name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_owned();
             out.edges.push(Edge {
                 from: SymbolId {
                     file: path.to_path_buf(),
@@ -250,14 +251,57 @@ fn emit_use(path_text: &str, node: tree_sitter::Node<'_>, path: &Path, out: &mut
             });
         }
         _ => {
-            out.library_imports.push(LibraryImport {
-                library: head.to_owned(),
-                symbol: String::new(),
-                file: path.to_path_buf(),
-                line,
-            });
+            // `use impact::Warning;` inside `src/graph/mod.rs` is a
+            // module-relative import, not an external crate. Distinguish
+            // by checking whether the head resolves to a sibling `.rs`
+            // or `<head>/mod.rs` in the same directory as the current
+            // file. If so, emit an Imports edge with `Confidence::Certain`
+            // pointing at the resolved file — no resolver pass needed.
+            // Otherwise keep the existing LibraryImport classification.
+            if let Some(internal) = resolve_sibling_module(path, head) {
+                out.edges.push(Edge {
+                    from: SymbolId {
+                        file: path.to_path_buf(),
+                        name: module_name,
+                        kind: SymbolKind::Module,
+                    },
+                    to: SymbolId {
+                        file: internal,
+                        name: String::new(),
+                        kind: SymbolKind::Module,
+                    },
+                    kind: EdgeKind::Imports,
+                    line,
+                    confidence: Confidence::Certain,
+                });
+            } else {
+                out.library_imports.push(LibraryImport {
+                    library: head.to_owned(),
+                    symbol: String::new(),
+                    file: path.to_path_buf(),
+                    line,
+                });
+            }
         }
     }
+}
+
+/// Resolve `head` as a module relative to `current_file`'s directory.
+/// Returns the resolved path when `<dir>/<head>.rs` or `<dir>/<head>/mod.rs`
+/// exists, else `None`. The fs checks are `.is_file()` calls — same cost
+/// as the resolver's existing `resolve_rs` path, so acceptable in the
+/// parser hot path.
+fn resolve_sibling_module(current_file: &Path, head: &str) -> Option<std::path::PathBuf> {
+    let dir = current_file.parent()?;
+    let sibling = dir.join(format!("{head}.rs"));
+    if sibling.is_file() {
+        return Some(sibling);
+    }
+    let modrs = dir.join(head).join("mod.rs");
+    if modrs.is_file() {
+        return Some(modrs);
+    }
+    None
 }
 
 /// Emit a [`Calls`] edge when a call expression's callee lies inside a named
