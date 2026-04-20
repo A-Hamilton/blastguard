@@ -19,19 +19,32 @@ use crate::parse::body_hash::body_hash;
 use crate::parse::symbols::render_signature;
 use crate::parse::ParseOutput;
 
-/// Source of the tree-sitter query embedded at compile time.
-const QUERY_SRC: &str = include_str!("../../queries/typescript.scm");
+/// Source of the tree-sitter queries embedded at compile time.
+/// `QUERY_TS` is the common query compiled against both grammars;
+/// `QUERY_TSX_EXTRA` adds JSX component-call captures that only the
+/// TSX grammar understands.
+const QUERY_TS: &str = include_str!("../../queries/typescript.scm");
+const QUERY_TSX_EXTRA: &str = include_str!("../../queries/tsx.scm");
 
 thread_local! {
-    /// Parser and compiled query per thread. Both are not `Send` so this is
-    /// the correct place to own them for rayon-parallel indexing.
+    /// Parser + query for plain TypeScript (`.ts`, `.mts`, `.cts`).
     static TS_STATE: std::cell::RefCell<(Parser, Query)> = std::cell::RefCell::new({
         let mut parser = Parser::new();
         let lang: Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
-        // Unreachable in a correctly-built binary — the grammar crate is a
-        // compile-time constant and the query is validated by `cargo test`.
         parser.set_language(&lang).expect("tree-sitter TypeScript grammar must load");
-        let query = Query::new(&lang, QUERY_SRC).expect("typescript.scm must be a valid query");
+        let query = Query::new(&lang, QUERY_TS).expect("typescript.scm must be a valid query");
+        (parser, query)
+    });
+
+    /// Parser + query for TSX (`.tsx`, `.jsx`). Concatenates the common
+    /// TS query with the JSX-specific extras so `<Button />` etc. also
+    /// produce `call.callee` captures.
+    static TSX_STATE: std::cell::RefCell<(Parser, Query)> = std::cell::RefCell::new({
+        let mut parser = Parser::new();
+        let lang: Language = tree_sitter_typescript::LANGUAGE_TSX.into();
+        parser.set_language(&lang).expect("tree-sitter TSX grammar must load");
+        let combined = format!("{QUERY_TS}\n{QUERY_TSX_EXTRA}");
+        let query = Query::new(&lang, &combined).expect("TSX query must compile");
         (parser, query)
     });
 }
@@ -52,7 +65,25 @@ thread_local! {
 /// unreachable in a correctly-built binary).
 #[must_use = "parsed symbols and imports should be ingested into the graph"]
 pub fn extract(path: &Path, source: &str) -> ParseOutput {
-    TS_STATE.with(|cell| {
+    // TSX/JSX needs the TSX grammar — plain TypeScript doesn't know about
+    // `<Button />` syntax and silently produces ERROR nodes across the
+    // entire JSX region, so component usages aren't captured as calls.
+    let is_tsx = matches!(
+        path.extension().and_then(|s| s.to_str()),
+        Some("tsx" | "jsx")
+    );
+    if is_tsx {
+        return extract_with(path, source, &TSX_STATE);
+    }
+    extract_with(path, source, &TS_STATE)
+}
+
+fn extract_with(
+    path: &Path,
+    source: &str,
+    state: &'static std::thread::LocalKey<std::cell::RefCell<(Parser, Query)>>,
+) -> ParseOutput {
+    state.with(|cell| {
         let mut state = cell.borrow_mut();
         let (parser, query) = &mut *state;
         let Some(tree) = parser.parse(source, None) else {
@@ -657,6 +688,59 @@ export function good() { return 1; }
 this is { not valid :: syntax
 export function alsoGood() { return 2; }
 ";
+
+    #[test]
+    fn tsx_parses_jsx_and_captures_component_as_call() {
+        use crate::graph::types::EdgeKind;
+        let tsx = "\
+import { Button } from './button';
+export function App() {
+    return <Button onClick={() => {}} />;
+}
+";
+        let out = extract(&PathBuf::from("src/App.tsx"), tsx);
+        // App and Button-invoking-JSX should parse cleanly — no partial parse.
+        assert!(
+            !out.partial_parse,
+            "TSX grammar should parse JSX without errors; got partial_parse=true"
+        );
+        // JSX element `<Button .../>` inside App() emits a Calls edge
+        // with callee=Button. HTML intrinsics would be filtered by the
+        // `^[A-Z]` predicate.
+        let has_call = out.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls && e.from.name == "App" && e.to.name == "Button"
+        });
+        assert!(
+            has_call,
+            "expected App → Button Calls edge from <Button/>; got edges = {:?}",
+            out.edges
+        );
+    }
+
+    #[test]
+    fn tsx_ignores_lowercase_html_intrinsics_as_calls() {
+        use crate::graph::types::EdgeKind;
+        let tsx = "\
+export function Page() {
+    return <div className=\"x\"><span>hi</span></div>;
+}
+";
+        let out = extract(&PathBuf::from("src/Page.tsx"), tsx);
+        // `<div>` and `<span>` are HTML intrinsics, not component calls.
+        // No Calls edges should mention them.
+        let lowercase_calls: Vec<_> = out
+            .edges
+            .iter()
+            .filter(|e| {
+                e.kind == EdgeKind::Calls
+                    && (e.to.name == "div" || e.to.name == "span")
+            })
+            .collect();
+        assert!(
+            lowercase_calls.is_empty(),
+            "HTML intrinsics should not be classified as component calls; got {lowercase_calls:?}"
+        );
+    }
 
     #[test]
     fn partial_parse_still_extracts_what_parsed() {
