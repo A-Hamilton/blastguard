@@ -60,3 +60,43 @@ images on DockerHub and Dockerfiles in repo").
    without change.
 
 Option 3 is the cheapest path to a first BlastGuard lift number.
+
+## Gap 6 — Gemma thinking-mode + response prefill incompatibility (microbench, open)
+
+During round 12's seeds=3 variance probe on `chain-search-to-graph +
+find-tamper-patterns`, llama-server returned a 400 on seed=3 with:
+
+```
+{"error": {"code": 400, "message": "Assistant response prefill is
+incompatible with enable_thinking.", "type": "invalid_request_error"}}
+```
+
+The Gemma 4 chat template (enabled via `--jinja`) activates
+`<think>` tags on the assistant's turn. llama.cpp rejects requests that
+also include an "assistant" role message with partial `content` (a
+"response prefill") under that template. The bench harness sometimes
+emits that shape when re-submitting a partial tool-call turn, which
+crashes the whole multi-seed job mid-flight.
+
+**Observed:** seeds 1 and 2 of the same 3-seed probe completed cleanly
+(BG 2/2 on chain-search, 2/2 on find-tamper), so this is stochastic
+based on model output shape, not a hard block on every run.
+
+**Unblock options:**
+
+1. In `bench/microbench.py::run_task`, never re-submit the assistant's
+   partial content verbatim — drop the `content` field when re-issuing a
+   turn under thinking-mode models. Requires detecting "this model has
+   thinking-mode on" from a config flag or a startup probe.
+2. Add `--reasoning off` to the llama-server command when the primary
+   goal is deterministic bench runs; trade potentially-worse reasoning
+   for stable pipelines. Noted in `.claude/skills/bench-rerun/SKILL.md`
+   step 9 already.
+3. Catch the 400 in `run_task` and record the rollout as
+   `stopped_reason = "prefill_thinking_conflict"` with empty tokens
+   instead of letting the exception crash the job. Keeps multi-seed
+   runs robust against this one seed being unlucky.
+
+Option 3 is the cheapest fix and doesn't distort downstream numbers
+(the skipped rollout is explicitly marked). Option 1 is the correct
+long-term fix.

@@ -804,3 +804,23 @@ DUMMY_KEY=sk-local bench/.venv/bin/python -m bench.microbench \
 ```
 
 Spend this round: ~$0 (local).
+
+### Round 12 addendum — partial seeds=2 confirmation on chain + find-tamper
+
+After the main run landed, a separate seeds=3 probe was launched on
+`chain-search-to-graph + find-tamper-patterns`. The probe crashed on
+seed 3 of `chain-search-to-graph` with a Gemma/llama-server
+incompatibility (see `bench/KNOWN_GAPS.md` Gap 6 — "Assistant response
+prefill is incompatible with enable_thinking"). Seeds 1 and 2
+completed cleanly before the crash:
+
+| task | arm | seed 1 | seed 2 |
+|---|---|:---:|:---:|
+| chain-search-to-graph | BG | ✅ `structural.rs:find` | ✅ `structural.rs:find` |
+| chain-search-to-graph | raw | ✅ (placeholder list form) | ✅ (placeholder list form) |
+| find-tamper-patterns | BG | ✅ | ✅ |
+| find-tamper-patterns | raw | ✅ | ✅ |
+
+BG at **2/2** on both tasks strengthens the main-run n=1 claim without
+contradicting it. The aborted seed=3 is a harness bug, not a BG
+regression signal.
