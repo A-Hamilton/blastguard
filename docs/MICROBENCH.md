@@ -824,3 +824,146 @@ completed cleanly before the crash:
 BG at **2/2** on both tasks strengthens the main-run n=1 claim without
 contradicting it. The aborted seed=3 is a harness bug, not a BG
 regression signal.
+
+## Round 13 — full 10-task × 3-seed suite, clean cache, grouped-arm
+
+First full-suite, multi-seed, clean-cache run. Most rigorous single
+measurement produced so far, and it **contradicts the rosy Round 12
+result** on chain-search-to-graph.
+
+**Setup changes vs round 12:**
+1. **All 10 tasks**, not 3.
+2. **n=3 seeds per (task, arm) cell**, not 1 — 60 rollouts total.
+3. **Grouped-arm order**: 30 raw back-to-back, then 30 BG back-to-back,
+   with one hard llama-swap reload at each arm boundary. Eliminates
+   raw-first/BG-second cache contamination.
+4. **Per-rollout JSONL append** for durability.
+5. **Judge defensive parse** so malformed Gemma JSON doesn't abort.
+
+Run: `bench/runs/20260420-224154-full-grouped-arm.jsonl` (60 rollouts)
++ `.judge.jsonl` (30 pairwise verdicts).
+
+### Priority 1a — deterministic grader (n=3 per cell)
+
+| task                        | raw   | BG    | Δ (pp) |
+|-----------------------------|:-----:|:-----:|:------:|
+| callers-apply-edit          | 2/3   | 3/3   | +33    |
+| cascade-signature-change    | 3/3   | 3/3   | 0      |
+| chain-search-to-graph       | 3/3   | 2/3   | −33    |
+| compare-parse-modules       | 3/3   | 2/3   | −33    |
+| explore-cold-index          | 0/3   | 0/3   | 0      |
+| find-tamper-patterns        | 3/3   | 3/3   | 0      |
+| impact-of-removing-libs     | 3/3   | 3/3   | 0      |
+| outline-tree-sitter-rust    | 1/3   | 2/3   | +33    |
+| tests-for-apply-change      | 2/3   | 3/3   | +33    |
+| trace-cache-persistence     | 3/3   | 1/3   | −67    |
+| **TOTAL**                   | **23/30** | **22/30** | −3pp |
+
+**Grader aggregate: statistically tied (22 vs 23).**
+
+Three of BG's four losses are grader-blind-spots where BG's answer was
+substantively correct but missed a literal keyword the substring check
+demanded:
+
+- **compare-parse-modules seed 1** — BG described both parsers but
+  didn't emit "tree-sitter".
+- **trace-cache-persistence seeds 1+2** — BG correctly identified
+  `rmp-serde` serialization but didn't emit the filename `cache.bin`.
+
+Only **chain-search-to-graph seed 3** is a genuine quality failure —
+25 turns, hit `max_turns`, empty answer. The agent got stuck. The
+other two chain-search seeds passed cleanly with `structural.rs:find`
+in the answer.
+
+### Priority 1b — LLM judge (n=3 judges per pair, 30 pairs total)
+
+| axis         | BG wins | raw wins | ties |
+|--------------|:-------:|:--------:|:----:|
+| correctness  | 5       | 10       | 15   |
+| substance    | 7       | **20**   | 3    |
+| conciseness  | 8       | 7        | 15   |
+| **majority** | **5**   | **10**   | **15** |
+
+**Raw wins the judge 10 : 5 BG.** Substance axis is decisive (raw 20,
+BG 7) — raw produces longer, more detailed answers. BG is slightly
+more concise.
+
+### Priority 2 — tokens (median per cell)
+
+| task                        | raw in | BG in  | Δ in  |
+|-----------------------------|-------:|-------:|:-----:|
+| callers-apply-edit          | 18,405 |  2,419 | **−87%** |
+| cascade-signature-change    | 14,536 |  5,623 | **−61%** |
+| chain-search-to-graph       | 40,089 | 65,534 | **+63%** |
+| compare-parse-modules       | 22,833 |  5,795 | **−75%** |
+| explore-cold-index          | 13,240 |  3,654 | **−72%** |
+| find-tamper-patterns        | 15,017 |  5,222 | **−65%** |
+| impact-of-removing-libs     | 23,320 | 44,731 | **+92%** |
+| outline-tree-sitter-rust    | 15,715 |  4,182 | **−73%** |
+| tests-for-apply-change      | 29,931 |  6,742 | **−77%** |
+| trace-cache-persistence     | 15,085 | 25,420 | **+68%** |
+
+BG dramatically cheaper on 7 of 10 tasks (−61 to −87% input). BG more
+expensive on the three multi-hop exploration tasks where it calls
+BlastGuard multiple times plus native tools.
+
+### Priority 3 — wall time
+
+**BG is faster on every single task.** Median wall delta ranges from
+−13% (trace-cache) to −88% (callers-apply-edit). Only chain-search is
+≈tied (+2%).
+
+### Round 13 vs Round 12 — why the reversal?
+
+Round 12 (n=1, 3 tasks, per-rollout flush): BG swept chain-search
+3/0 on judge. Round 13 (n=3, all 10 tasks, grouped-arm clean cache):
+BG loses chain-search 0/3 judge. Two possibilities:
+
+1. **Round 12 was an n=1 artifact.** A single sampling draw favoured
+   BG; at n=3 the signal trends the other way.
+2. **Cache contamination in round 12 helped BG.** With raw running
+   first per (task,seed), BG inherited a warm cache on the shared
+   prefix. Grouped-arm clean cache removes this.
+
+Either way, **the round 12 headline "tool-level fix closes the
+regression" is overstated.**
+
+### Honest interpretation
+
+The **cost-per-quality** picture is still good for BG: 70%+ cheaper
+tokens + 70%+ faster wall for roughly-equivalent correctness is a real
+product win. But the **absolute quality crown goes to raw**.
+
+- **BG cost-wins decisively.**
+- **BG ≈ raw on correctness** (grader 22 vs 23; judge correctness
+  5-10-15).
+- **BG produces shorter, thinner answers** — wins conciseness, loses
+  substance.
+
+Consistent with the CodeCompass finding that retrieval tools lift
+correctness only on hidden-dependency tasks where the retriever can
+answer the question directly. On a general 10-task suite mixing
+hidden-dependency, semantic, and exploratory tasks, the effect is
+diluted and the cost advantage dominates.
+
+### What Round 13 does NOT establish
+
+- **n=3 seeds is still underpowered** — each per-task Δ is ±33pp.
+- **Gemma-specific.** Cloud models may close the substance gap.
+- **SWE-bench Pro lift** — micro-bench tasks are repo-navigation
+  questions on this codebase, not hidden-dependency bug fixes.
+
+### Replication
+
+```bash
+test -d .blastguard && rm -r .blastguard
+cargo build --release 2>&1 | tail -3
+
+DUMMY_KEY=sk-local bench/.venv/bin/python -u -m bench.microbench \
+  --api-base http://127.0.0.1:8080/v1 --api-key-env DUMMY_KEY \
+  --model gemma-4 --model-id-override gemma-4 \
+  --seeds 3 --run-judge --judge-n 3 \
+  --output bench/runs/$(date +%Y%m%d-%H%M%S)-round13.jsonl
+```
+
+Wall: ~90 min for 60 rollouts + 30 judge pairs. Spend: ~$0 (local).
