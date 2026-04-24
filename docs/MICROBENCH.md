@@ -1,4 +1,75 @@
-# Micro-benchmark — 2026-04-19
+# Micro-benchmark
+
+## TL;DR (current state — Round 13, 2026-04-20)
+
+**BlastGuard is a cost-quality tradeoff on Gemma 4, not a quality win.**
+
+Measured against native-tools-only across 10 repo-navigation tasks × 3 seeds
+× 2 arms (60 rollouts) with clean-cache grouped-arm discipline:
+
+| signal | outcome |
+|---|---|
+| **Cost (input tokens)** | BG **−61% to −87%** on 7 of 10 tasks; BG **+63% to +92%** on 3 multi-hop tasks |
+| **Wall time** | BG faster on **every single task** (−13% to −88%) |
+| **Correctness (grader)** | **Tied** — BG 22/30 vs raw 23/30 |
+| **Correctness (LLM judge)** | **Tied** — 5 BG / 10 raw / 15 ties across 30 pairs |
+| **Substance** | **Raw wins 20-7** — raw gives longer, richer answers |
+| **Conciseness** | **Tied** — BG 8 / raw 7 / 15 ties |
+
+Honest headline: **3-10× cheaper, faster everywhere, correctness tied,
+answers thinner.** Not "+1 to +3pp SWE-bench lift" — that claim remains
+unmeasured until the Verified pivot lands.
+
+## Round timeline (skim this to find the section you want)
+
+| Round | Date | Model | Scope | Headline |
+|:-----:|:----:|-------|-------|----------|
+| 1-2 | 04-19 | MiniMax M2.7 | 2-4 tasks, cloud | First measurements; BG net-cost-loses pre-resolver |
+| 3-5 | 04-19 | MiniMax M2.7 | 4 tasks | Tuning — bundle docstrings, compressed tool descs; rounds 3-4 −26% cost each, round 5 regressed |
+| 6 | 04-19 | MiniMax M2.7 | 4 tasks | Tier-1 output optimizations; cumulative −33% vs baseline |
+| 7 | 04-19 | Gemma 4 26B | 1 task × 3 seeds | Cross-file resolver landed; tokens win, wall loses (Gemma thinking-mode) |
+| 8 | 04-19 | Gemma 4 26B | 1 task × 1 seed | Pipeline verification run (grader + judge), BG won tokens, lost judge |
+| 9 (aborted) | 04-20 | Gemma 4 26B | — | VRAM-OOM at -c 32768; motivated KV-quant + -c 16384 |
+| 9 | 04-20 | Gemma 4 26B | 3 tasks × 1 seed | KV-quant fix; BG wins tokens+wall, loses judge on 2/3 |
+| 10 | 04-20 | Gemma 4 26B | 3 tasks × 1 seed | Silent STEP-TYPE prompt; chain-search still stuck |
+| 11 | 04-20 | Gemma 4 26B | 3 tasks × 1 seed | `chain from A to B` hint; chain-search still 2/3 hops |
+| 12 | 04-20 | Gemma 4 26B | 3 tasks × 1 seed | **Tool-level fix**: `chain from X to FILE` endpoint; **BG sweeps chain-search 3/0 on judge** |
+| 13 | 04-20 | Gemma 4 26B | **10 tasks × 3 seeds** | **First rigorous full-suite**: cost-quality tradeoff; Round 12's sweep was n=1 artifact |
+
+**Key lesson from the trajectory:** n=1 results should be treated as
+hypotheses, not findings. Round 12 "proved" BG wins chain-search; Round 13
+at n=3 with clean cache showed BG *loses* it 0/3. Always confirm before
+claiming.
+
+## How to read this document
+
+- **Skim the TL;DR above** for the current-state answer.
+- **Round 13** is the authoritative measurement for Gemma 4 — read it if
+  you want the details.
+- **Rounds 2-12** are the learning trajectory. Each one narrates a
+  hypothesis, a tweak, and the result. They're useful for understanding
+  how the current design converged, but individual conclusions were often
+  superseded by later rounds.
+- **Round 12 vs 13** is the cleanest example of why multi-seed clean-cache
+  matters — identical codebase, identical task, opposite verdict.
+
+## What this document does NOT contain
+
+- **SWE-bench Pro or Verified results.** Zero. The Phase 1 work is
+  micro-bench; downstream-task evaluation is still pending (blocked on
+  Gap 5 Docker tag truncation; unblock path is Verified).
+- **Cloud-model measurements.** All Gemma 4 local. Cloud (Sonnet 4.6,
+  Opus 4.7, GLM-5.1) are plausibly different — unmeasured.
+- **Qwen 3.6 results at parity with Gemma.** A partial Qwen run was
+  attempted 04-21 but exposed model-specific quirks (DONE-emission
+  reliability, tool-call template handling) that need harness work before
+  a fair comparison.
+
+---
+
+# Historical records below
+
+## Micro-benchmark — 2026-04-19
 
 Two rounds of paired A/B testing against the BlastGuard repo, using
 MiniMax M2.7 via OpenRouter. The second round (with 4 tasks and
