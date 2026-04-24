@@ -13,8 +13,8 @@ use regex::Regex;
 /// Parsed query kind. The dispatcher routes on this enum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryKind {
-    /// `callers of X` / `what calls X` — reverse-edge lookup.
-    Callers(String),
+    /// `callers of X` (with_context=false) / `callers of X with context` (with_context=true).
+    Callers(String, bool),
     /// `callees of X` / `what does X call` — forward-edge lookup.
     Callees(String),
     /// `outline of FILE` — all symbols declared in a file.
@@ -44,8 +44,13 @@ pub enum QueryKind {
 pub fn classify(query: &str) -> QueryKind {
     let q = query.trim();
 
-    if let Some(caps) = re(r"^(?:callers of|what calls)\s+(.+)$").captures(q) {
-        return QueryKind::Callers(caps[1].trim().to_string());
+    if let Some(caps) = re(r"^callers of\s+(.+?)(\s+with\s+context)?$").captures(q) {
+        let name = caps[1].trim().to_string();
+        let with_context = caps.get(2).is_some();
+        return QueryKind::Callers(name, with_context);
+    }
+    if let Some(caps) = re(r"^what calls\s+(.+)$").captures(q) {
+        return QueryKind::Callers(caps[1].trim().to_string(), false);
     }
     if let Some(caps) = re(r"^callees of\s+(.+)$").captures(q) {
         return QueryKind::Callees(caps[1].trim().to_string());
@@ -114,7 +119,7 @@ mod tests {
     fn callers_of_pattern() {
         assert_eq!(
             classify("callers of processRequest"),
-            QueryKind::Callers("processRequest".into())
+            QueryKind::Callers("processRequest".into(), false)
         );
     }
 
@@ -122,7 +127,31 @@ mod tests {
     fn what_calls_alias() {
         assert_eq!(
             classify("what calls handler"),
-            QueryKind::Callers("handler".into())
+            QueryKind::Callers("handler".into(), false)
+        );
+    }
+
+    #[test]
+    fn callers_of_pattern_without_context_flag() {
+        assert_eq!(
+            classify("callers of processRequest"),
+            QueryKind::Callers("processRequest".into(), false)
+        );
+    }
+
+    #[test]
+    fn callers_of_pattern_with_context_flag() {
+        assert_eq!(
+            classify("callers of apply_edit with context"),
+            QueryKind::Callers("apply_edit".into(), true)
+        );
+    }
+
+    #[test]
+    fn what_calls_alias_no_context_support() {
+        assert_eq!(
+            classify("what calls handler"),
+            QueryKind::Callers("handler".into(), false)
         );
     }
 
@@ -210,7 +239,7 @@ mod tests {
     fn leading_trailing_whitespace_trimmed() {
         assert_eq!(
             classify("  callers of foo  "),
-            QueryKind::Callers("foo".into())
+            QueryKind::Callers("foo".into(), false)
         );
     }
 
@@ -220,7 +249,7 @@ mod tests {
         // real usage). Captured as-is after trimming.
         assert_eq!(
             classify("callers of some symbol"),
-            QueryKind::Callers("some symbol".into())
+            QueryKind::Callers("some symbol".into(), false)
         );
     }
 }
