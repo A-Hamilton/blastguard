@@ -436,13 +436,20 @@ def run_task(
                 max_tokens=4096,
             )
         except BadRequestError as e:
-            # Gemma / llama-server: an assistant "prefill" message (partial
-            # content under thinking-mode) returns 400 mid-rollout. Record
-            # the rollout as stopped instead of crashing the whole multi-
+            # Known recoverable 400s from llama-server / reasoning-mode
+            # models. Record the rollout as stopped with a descriptive
+            # reason and move on, instead of crashing the whole multi-
             # seed job. See bench/KNOWN_GAPS.md Gap 6.
             msg_text = str(e)
             if "prefill is incompatible with enable_thinking" in msg_text:
                 stopped_reason = "prefill_thinking_conflict"
+                break
+            if "exceeds the available context size" in msg_text:
+                # Rollout's cumulative conversation blew past the server's
+                # --ctx-size ceiling. Common on multi-hop tasks at models
+                # with small context (Qwen 3.6 @ 40K ctx). Not a BG or raw
+                # quality failure — it's a budget-exhaustion mid-rollout.
+                stopped_reason = "context_exceeded"
                 break
             raise
         usage = resp.usage
