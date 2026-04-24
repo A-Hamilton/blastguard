@@ -453,7 +453,13 @@ def run_task(
 
         choice = resp.choices[0]
         msg = choice.message
-        content_text = msg.content or ""
+        # llama.cpp (and vLLM with enable_thinking=True) splits reasoning-model
+        # output into `content` (user-visible) and `reasoning_content` (the
+        # <think> block). Gemma 4 + Qwen 3.x both use this. If the model puts
+        # its whole turn in reasoning_content — common when max_tokens is tight
+        # or the model forgets to close <think> — fall back to that so we
+        # don't treat a legitimate turn as an empty answer.
+        content_text = msg.content or getattr(msg, "reasoning_content", None) or ""
 
         assistant_entry: dict[str, Any] = {
             "role": "assistant",
