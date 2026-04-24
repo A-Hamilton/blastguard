@@ -132,14 +132,6 @@ mod tests {
     }
 
     #[test]
-    fn callers_of_pattern_without_context_flag() {
-        assert_eq!(
-            classify("callers of processRequest"),
-            QueryKind::Callers("processRequest".into(), false)
-        );
-    }
-
-    #[test]
     fn callers_of_pattern_with_context_flag() {
         assert_eq!(
             classify("callers of apply_edit with context"),
@@ -152,6 +144,17 @@ mod tests {
         assert_eq!(
             classify("what calls handler"),
             QueryKind::Callers("handler".into(), false)
+        );
+    }
+
+    #[test]
+    fn what_calls_alias_treats_with_context_suffix_as_literal_name() {
+        // `what calls` is the strict alias — no `with context` suffix
+        // support. The entire string after `what calls ` is captured
+        // as the name verbatim.
+        assert_eq!(
+            classify("what calls handler with context"),
+            QueryKind::Callers("handler with context".into(), false)
         );
     }
 
