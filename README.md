@@ -95,30 +95,73 @@ attribution after a batch of edits.
 
 ## Honest positioning
 
-This is a Phase 1 MVP. **BlastGuard's own SWE-bench lift has not been measured
-yet** — the harness (`bench/`) is built and live-verified on synthetic tasks,
-but a full benchmark run is currently blocked by an upstream bug in SWE-agent's
-Docker deployment when consuming SWE-bench Pro images (tag-length truncation).
-See `docs/BENCHMARKING.md` for the setup and `bench/KNOWN_GAPS.md` for the
-blocker.
+This is a Phase 1 MVP with a specific, measured value proposition — and a
+specific claim that is **not yet verified**.
 
-Projected lift is `+1 to +3 points` on SWE-bench Pro with a realistic confidence
-interval of `-1 to +5` — grounded in peer-reviewed adjacent research:
+### What the measurements actually show (Round 13, Gemma 4 26B A4B, full 10-task × 3-seed × 2-arm suite)
 
-- cAST (arXiv:2506.15655): up to +2.7 Pass@1 on SWE-bench Lite/Verified.
-- WarpGrep v2 (Morph): +2.1–3.7 on SWE-bench Pro.
-- Auggie (Augment Code): +5.9 over the SWE-Agent Scale-AI scaffold.
-- CodeCompass (arXiv:2602.20048): +20pp on hidden-dependency tasks, 0pp on
-  semantic tasks — exactly the split BlastGuard's graph-first design predicts.
+- **3–10× cheaper.** Median input tokens −61% to −87% on 7 of 10 tasks; BG
+  more expensive on 3 multi-hop tasks where it calls BlastGuard + native
+  tools together.
+- **Faster on every task.** Median wall delta ranges from −13% (trace-cache)
+  to −88% (callers-apply-edit). Only chain-search is ≈tied (+2%).
+- **Tied on correctness.** Deterministic substring grader: BG 22/30 vs raw
+  23/30. Judge correctness axis: BG 5 / raw 10 / ties 15. Not a correctness
+  win, not a correctness loss — statistically a tie.
+- **Loses on substance.** LLM-judge substance axis: raw 20 wins, BG 7. BG's
+  palette-constrained answers are shorter and thinner than raw's free-form
+  exploration. BG wins conciseness 8–7–15, which is the same phenomenon from
+  the other side.
 
-BlastGuard's strongest durable value is on weaker / cheaper models (Sonnet 4.6,
-Haiku 4.5, GLM-5.1) where token efficiency translates directly to cost savings.
-Opus 4.7 and Claude Mythos already handle much of what BlastGuard provides
-natively; the lift there may be smaller.
+**Honest framing: a cost-quality tradeoff.** BlastGuard is decisively cheaper
+and faster at roughly-equivalent correctness on this model. It is not
+currently a quality-ahead tool by absolute measure.
 
-Benchmark integrity matters. The grader in `bench/grader.py` defends against the
-UC Berkeley "BenchJack" `conftest.py` exploit (any change to `conftest.py`,
-`pytest.ini`, `tox.ini`, or CI workflows counts as unresolved tampering).
+See `docs/MICROBENCH.md` Round 13 section for the full tables and prior
+rounds' learning trajectory.
+
+### What is NOT measured (and why)
+
+**Downstream-task lift on SWE-bench Pro / Verified** — zero.
+
+The Phase 1 measurement is micro-bench questions on this codebase, not
+hidden-dependency bug fixes on downstream repos. The bench harness (`bench/`)
+is built for SWE-bench, but a real Pro run is blocked by an upstream SWE-agent
+Docker tag-length bug (see `bench/KNOWN_GAPS.md` Gap 5). The unblock is to
+pivot to SWE-bench Verified, which uses shorter image tags; this is planned
+work, not done work.
+
+Until that run lands, **do not quote a +1-3pp SWE-bench lift number from this
+README.** That claim is a prior-based projection, not a measurement.
+
+### Where adjacent research suggests BG *should* help
+
+- **CodeCompass (arXiv:2602.20048):** +20pp on hidden-dependency tasks, 0pp
+  on semantic tasks. Round 13 dilutes this across a mixed task set; a
+  hidden-dependency-weighted benchmark should concentrate the effect.
+- **cAST (arXiv:2506.15655):** +2.67 Pass@1 on SWE-bench Lite.
+- **WarpGrep v2 (Morph):** +2.1–3.7 on SWE-bench Pro.
+- **Auggie (Augment Code):** +5.9 over SWE-Agent Scale-AI scaffold.
+
+These are adjacent, not equivalent — they test different tools under different
+conditions. Our own measurement will supersede them once it exists.
+
+### Model sensitivity (unmeasured on stronger reasoners)
+
+All quality measurements above are on Gemma 4 26B A4B (Q4_K_M, local,
+thinking-mode). Cloud models (Sonnet 4.6, Opus 4.7) may close the substance
+gap — their richer reasoning might use BG's palette more fully. This is
+unmeasured. A partial Qwen 3.6 35B A3B run was attempted but exposed model-
+specific quirks (DONE-emission reliability, tool-call template handling)
+that require further infrastructure work before a fair comparison.
+
+### Benchmark integrity
+
+The grader in `bench/grader.py` defends against the UC Berkeley "BenchJack"
+`conftest.py` exploit — any change to `conftest.py`, `pytest.ini`, `tox.ini`,
+or CI workflows counts as unresolved tampering. Unrelated to Phase 1's lift
+claim; included because tampering-aware grading is a small-but-real
+differentiator for any SWE-bench-adjacent tool.
 
 ### What's verified today (not projected)
 
@@ -154,25 +197,17 @@ UC Berkeley "BenchJack" `conftest.py` exploit (any change to `conftest.py`,
     deltas with paired-difference 95% CI.
   - Priority 3: wall time — indicator only on local Gemma
     (thinking-mode inflates wall beyond cloud-API reality).
-- **Measured micro-benchmark wins on Gemma-4 26B (local, zero API
-  cost):** BG arm consistently beats a native-tools-only arm on
-  real exploration tasks on this repo:
-  - `explore-cold-index` (intra-file): BG arm **−60% input tokens,
-    −78% wall time**, 3× `blastguard_search` only (no native tools).
-  - Cross-file tasks: resolver chain landed after round 6; round-7
-    data on `chain-search-to-graph` is documented honestly in
-    `docs/MICROBENCH.md` as a mixed result (−34% tokens, +379% wall
-    on Gemma thinking-mode, correctness equivalent). Re-measure
-    pending on a non-thinking-mode model.
-  - See `docs/MICROBENCH.md` for the full trajectory across six
-    tuning rounds plus the round-7 post-resolver-chain result,
-    and the research citations (arXiv:2602.14878 tool-description
-    compression, arXiv:2604.11716 step-type classification,
-    arXiv:2306.05685 LLM-as-judge bias mitigations) that drove the
-    design.
+- **Measured micro-benchmark results on Gemma-4 26B A4B (Round 13,
+  full 10-task × 3-seed × 2-arm, local, zero API cost):** a clean
+  cost-quality tradeoff. See `docs/MICROBENCH.md` Round 13 for the
+  full tables; summary in "Honest positioning" above. Prior rounds
+  document the learning trajectory (including a Round-12 result that
+  Round 13 overturned at n=3 — a good example of why single-seed
+  findings should be treated as hypotheses).
 
-What's pending: the lift number on SWE-bench Pro. Waiting on upstream
-SWE-agent fixes or community contribution.
+What's pending: real downstream-task lift on SWE-bench Verified.
+Waiting on the pivot from SWE-bench Pro (blocked by Gap 5) to
+Verified (shorter image tags, unblocked path).
 
 ## Known limitations (Phase 1)
 
