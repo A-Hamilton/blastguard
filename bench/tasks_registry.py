@@ -28,7 +28,7 @@ TASKS: list[dict[str, Any]] = [
             "what calls it. Answer in 3-5 sentences. When done, write 'DONE' "
             "on its own line."
         ),
-        "expected_substrings": ["cold_index", "walk_project"],
+        "expected_substrings": ["cold_index", "warm_start"],
     },
     {
         "id": "callers-apply-edit",
