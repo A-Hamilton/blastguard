@@ -88,7 +88,7 @@ TASKS: list[dict[str, Any]] = [
             "format it's serialized in. Answer in under 8 sentences. Write "
             "'DONE' when finished."
         ),
-        "expected_substrings": ["cache.bin", "rmp"],
+        "expected_substrings": ["MessagePack", "rmp"],
     },
     {
         # Easy find + grep task — direct-symbol question where grep usually wins.
