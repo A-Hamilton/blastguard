@@ -1038,3 +1038,78 @@ DUMMY_KEY=sk-local bench/.venv/bin/python -u -m bench.microbench \
 ```
 
 Wall: ~90 min for 60 rollouts + 30 judge pairs. Spend: ~$0 (local).
+
+## Round 15 — `callers of X with context` feature validated (quick-bench)
+
+First post-feature measurement. Round 13's LLM-judge found BG losing
+the substance axis 20-7, with the #1 cause being `callers_of`
+returning signatures but not argument values at call sites. PR #20
+shipped a new opt-in query variant `callers of NAME with context`
+that returns the enclosing statement around each call via
+tree-sitter.
+
+**Setup:** `/bench-quick` against Qwen 3.6 + jinja (3 canary tasks ×
+1 seed × 2 arms = 6 rollouts, no judge). Run:
+`bench/runs/20260424-131456-quick-qwen-post-context.jsonl`.
+
+### Grader
+
+| task                        | raw | BG |
+|-----------------------------|:---:|:--:|
+| callers-apply-edit          | ✅  | ✅ |
+| find-tamper-patterns        | ✅  | ✅ |
+| outline-tree-sitter-rust    | ✅  | ✅ |
+
+**6/6 PASS.** Clean slate.
+
+### Tokens (BG vs raw)
+
+| task                        | raw in | BG in  | Δ       |
+|-----------------------------|-------:|-------:|:-------:|
+| callers-apply-edit          | 43,381 | 14,554 | **−66%** |
+| find-tamper-patterns        | 16,239 | 23,750 | +46%   |
+| outline-tree-sitter-rust    |  7,586 |  3,363 | **−56%** |
+
+### Wall
+
+BG faster on callers-apply-edit (−62%) and outline (−45%). Slower on
+find-tamper-patterns (+44%) where BG runs 8 turns vs raw's 3.
+
+### The qualitative win
+
+BG's `callers-apply-edit` answer is now a structured Markdown table
+with an **`old_text` value column** containing exact argument
+literals:
+
+```
+| `apply_edit_missing_old_text_returns_edit_not_found`
+|   | `"NOT_PRESENT"` — a literal string guaranteed not to exist
+| `apply_edit_ambiguous_old_text_returns_ambiguous_edit`
+|   | `"= 1"` — a literal string appearing twice in the file
+| ...
+```
+
+Compare to Round 13's BG output on the same task:
+
+```
+| apply_edit_missing_old_text_returns_edit_not_found
+|   | (This is a test case, likely passing an empty or non-matching string)
+```
+
+This is the **exact substance gap** identified in Round 13's judge
+analysis, closed at the tool layer. The agent picked up the new
+query variant from the updated BLASTGUARD_BIAS cheat-sheet (2 BG
+calls, 3 bash) — no manual steering needed.
+
+### What Round 15 does NOT establish
+
+- n=1. Need n=3 at minimum for stable per-task claims (a formal
+  rigor round on the feature is future work).
+- LLM-judge axis breakdown. Grader confirms correctness; the
+  substance-axis improvement needs a full judge run to quantify.
+- Gemma behavior. This was Qwen 3.6 only. Gemma 4 rerun on the
+  same canaries would strengthen the cross-model claim.
+
+Recommendation: schedule a proper Round 16 rigor round (10-task ×
+3-seed × 2-arm + judge) as the headline validation of the feature.
+Estimated wall: 90-120 min on Qwen, 60 min on Gemma.
