@@ -12,6 +12,7 @@ pub mod hit;
 pub mod query;
 pub mod structural;
 pub mod text;
+pub(crate) mod context_extract;
 
 pub use dispatcher::dispatch;
 pub use hit::SearchHit;

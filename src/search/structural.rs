@@ -61,6 +61,7 @@ pub fn callers_of(
     name: &str,
     max_hits: usize,
     project_root: &std::path::Path,
+    _with_context: bool,
 ) -> Vec<SearchHit> {
     let mut targets = find_by_name(graph, name);
     if targets.is_empty() {
@@ -688,7 +689,7 @@ mod tests {
             });
         }
 
-        let hits = callers_of(&g, "target", 10, std::path::Path::new("."));
+        let hits = callers_of(&g, "target", 10, std::path::Path::new("."), false);
         let files: Vec<_> = hits.iter().map(|h| h.file.clone()).collect();
         assert!(files.contains(&PathBuf::from("a.ts")));
         assert!(files.contains(&PathBuf::from("b.ts")));
@@ -731,7 +732,7 @@ mod tests {
             confidence: Confidence::Certain,
         });
 
-        let hits = callers_of(&g, "login", 10, std::path::Path::new("."));
+        let hits = callers_of(&g, "login", 10, std::path::Path::new("."), false);
         // Exactly one hit: the function-level caller. The redundant
         // importer hint for handler.ts must be suppressed.
         assert_eq!(
@@ -753,7 +754,7 @@ mod tests {
     #[test]
     fn callers_of_empty_when_target_missing() {
         let g = CodeGraph::new();
-        let hits = callers_of(&g, "nonexistent", 10, std::path::Path::new("."));
+        let hits = callers_of(&g, "nonexistent", 10, std::path::Path::new("."), false);
         assert_eq!(hits.len(), 1);
         assert!(hits[0]
             .signature
@@ -781,7 +782,7 @@ mod tests {
             });
         }
 
-        let hits = callers_of(&g, "target", 5, std::path::Path::new("."));
+        let hits = callers_of(&g, "target", 5, std::path::Path::new("."), false);
         assert_eq!(hits.len(), 5);
     }
 
@@ -1082,7 +1083,7 @@ mod tests {
     fn callers_of_returns_hint_when_no_callers_found() {
         let mut g = CodeGraph::new();
         g.insert_symbol(sym("orphan", "a.rs"));
-        let hits = callers_of(&g, "orphan", 10, std::path::Path::new("."));
+        let hits = callers_of(&g, "orphan", 10, std::path::Path::new("."), false);
         assert_eq!(hits.len(), 1);
         let hint = hits[0].signature.as_deref().expect("hint signature");
         assert!(hint.contains("cross-file"));
@@ -1135,7 +1136,7 @@ mod tests {
             });
         }
 
-        let hits = callers_of(&g, "foo", 10, std::path::Path::new("."));
+        let hits = callers_of(&g, "foo", 10, std::path::Path::new("."), false);
         // No intra-file callers; the two importers should surface as hints.
         assert_eq!(
             hits.len(),
@@ -1187,7 +1188,7 @@ mod tests {
         assert_eq!(find_hits[0].file, PathBuf::from("hi.ts"));
 
         // `callers of target` orders hi before lo because hi has centrality 100.
-        let caller_hits = callers_of(&g, "target", 10, std::path::Path::new("."));
+        let caller_hits = callers_of(&g, "target", 10, std::path::Path::new("."), false);
         assert_eq!(caller_hits[0].file, PathBuf::from("hi.ts"));
         assert_eq!(caller_hits[1].file, PathBuf::from("lo.ts"));
     }

@@ -1,0 +1,363 @@
+//! AST-smart context extraction around a call site — returns the
+//! enclosing statement's text via tree-sitter so `callers of X with
+//! context` can surface argument values without a follow-up `read_file`.
+//!
+//! See `docs/superpowers/specs/2026-04-24-callers-with-context-design.md`.
+
+// Dead-code lint: this module's items are consumed by
+// `search::structural::callers_of` which receives the `with_context` param
+// in Task 4. Until that wiring lands the items are unreachable from outside
+// the test suite.
+#![allow(dead_code)]
+
+use std::path::Path;
+
+/// Maximum context lines to return per hit. Guards against pathological
+/// multi-line chains (e.g. hundred-line builder calls). Most enclosing
+/// statements are 1-5 lines.
+const MAX_CONTEXT_LINES: usize = 20;
+
+/// Maximum ancestor hops before giving up and falling back to the
+/// line-window heuristic. Tree-sitter ASTs are typically shallow
+/// around a call expression; 8 covers realistic nesting.
+const MAX_ANCESTOR_HOPS: usize = 8;
+
+/// Return the enclosing statement's text around a call at `line` in
+/// `file`. Best-effort: returns `None` only when the file is
+/// unreadable or the language isn't supported by any of our
+/// tree-sitter parsers. When the AST heuristic can't find a
+/// statement ancestor, falls back to a ±1 line window.
+///
+/// `line` is 1-based (matching `Edge.line` in the graph).
+#[must_use]
+pub fn enclosing_statement(file: &Path, line: u32) -> Option<String> {
+    let source = std::fs::read_to_string(file).ok()?;
+    let language = detect_language(file)?;
+    if let Some(text) = extract_via_ast(&source, line, language) {
+        return Some(text);
+    }
+    Some(line_window_fallback(&source, line, 1))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Language {
+    Rust,
+    Python,
+    TypeScript,
+    JavaScript,
+    Tsx,
+}
+
+fn detect_language(file: &Path) -> Option<Language> {
+    match file.extension().and_then(|e| e.to_str()) {
+        Some("rs") => Some(Language::Rust),
+        Some("py") => Some(Language::Python),
+        Some("ts") => Some(Language::TypeScript),
+        Some("tsx") => Some(Language::Tsx),
+        Some("js" | "jsx" | "mjs" | "cjs") => Some(Language::JavaScript),
+        _ => None,
+    }
+}
+
+/// Return a ±N-line window around `line` (1-based). Always succeeds
+/// for any valid source string; clamps at file boundaries. Returns
+/// at most `MAX_CONTEXT_LINES` lines.
+fn line_window_fallback(source: &str, line: u32, radius: u32) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let center = (line.saturating_sub(1)) as usize;
+    let start = center.saturating_sub(radius as usize);
+    let end = (center + radius as usize + 1).min(lines.len());
+    let slice = &lines[start..end];
+    let capped = if slice.len() > MAX_CONTEXT_LINES {
+        &slice[..MAX_CONTEXT_LINES]
+    } else {
+        slice
+    };
+    capped.join("\n")
+}
+
+// Tree-sitter extraction lives below. Each language owns a
+// thread-local Parser (Parser is not Send-safe, matching
+// src/parse/rust.rs's pattern).
+
+fn extract_via_ast(source: &str, line: u32, lang: Language) -> Option<String> {
+    match lang {
+        Language::Rust => extract_rust(source, line),
+        Language::Python => extract_python(source, line),
+        Language::TypeScript => extract_typescript(source, line),
+        Language::Tsx => extract_tsx(source, line),
+        Language::JavaScript => extract_javascript(source, line),
+    }
+}
+
+// ── Rust ──────────────────────────────────────────────────────────────
+
+thread_local! {
+    static RS_PARSER: std::cell::RefCell<tree_sitter::Parser> = std::cell::RefCell::new({
+        let mut p = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_rust::language();
+        p.set_language(&lang)
+            .expect("tree-sitter Rust grammar must load");
+        p
+    });
+}
+
+fn extract_rust(source: &str, line: u32) -> Option<String> {
+    RS_PARSER.with(|cell| {
+        let tree = cell.borrow_mut().parse(source, None)?;
+        let call = deepest_call_at_line(&tree.root_node(), line)?;
+        let stmt = climb_to_statement(call, RUST_STATEMENT_KINDS)?;
+        extract_node_text(source, stmt)
+    })
+}
+
+const RUST_STATEMENT_KINDS: &[&str] = &[
+    "let_declaration",
+    "expression_statement",
+    "return_expression",
+    "macro_invocation",
+    "assignment_expression",
+];
+
+// ── Python ────────────────────────────────────────────────────────────
+
+thread_local! {
+    static PY_PARSER: std::cell::RefCell<tree_sitter::Parser> = std::cell::RefCell::new({
+        let mut p = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+        p.set_language(&lang)
+            .expect("tree-sitter Python grammar must load");
+        p
+    });
+}
+
+fn extract_python(source: &str, line: u32) -> Option<String> {
+    PY_PARSER.with(|cell| {
+        let tree = cell.borrow_mut().parse(source, None)?;
+        let call = deepest_call_at_line(&tree.root_node(), line)?;
+        let stmt = climb_to_statement(call, PY_STATEMENT_KINDS)?;
+        extract_node_text(source, stmt)
+    })
+}
+
+const PY_STATEMENT_KINDS: &[&str] = &[
+    "expression_statement",
+    "assignment",
+    "return_statement",
+    "if_statement",
+];
+
+// ── TypeScript ────────────────────────────────────────────────────────
+
+thread_local! {
+    static TS_PARSER: std::cell::RefCell<tree_sitter::Parser> = std::cell::RefCell::new({
+        let mut p = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        p.set_language(&lang)
+            .expect("tree-sitter TypeScript grammar must load");
+        p
+    });
+}
+
+fn extract_typescript(source: &str, line: u32) -> Option<String> {
+    TS_PARSER.with(|cell| {
+        let tree = cell.borrow_mut().parse(source, None)?;
+        let call = deepest_call_at_line(&tree.root_node(), line)?;
+        let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
+        extract_node_text(source, stmt)
+    })
+}
+
+thread_local! {
+    static TSX_PARSER: std::cell::RefCell<tree_sitter::Parser> = std::cell::RefCell::new({
+        let mut p = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TSX.into();
+        p.set_language(&lang)
+            .expect("tree-sitter TSX grammar must load");
+        p
+    });
+}
+
+fn extract_tsx(source: &str, line: u32) -> Option<String> {
+    TSX_PARSER.with(|cell| {
+        let tree = cell.borrow_mut().parse(source, None)?;
+        let call = deepest_call_at_line(&tree.root_node(), line)?;
+        let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
+        extract_node_text(source, stmt)
+    })
+}
+
+const TS_STATEMENT_KINDS: &[&str] = &[
+    "lexical_declaration",
+    "expression_statement",
+    "return_statement",
+    "assignment_expression",
+    "variable_declaration",
+];
+
+// ── JavaScript ────────────────────────────────────────────────────────
+
+thread_local! {
+    static JS_PARSER: std::cell::RefCell<tree_sitter::Parser> = std::cell::RefCell::new({
+        let mut p = tree_sitter::Parser::new();
+        let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
+        p.set_language(&lang)
+            .expect("tree-sitter JavaScript grammar must load");
+        p
+    });
+}
+
+fn extract_javascript(source: &str, line: u32) -> Option<String> {
+    JS_PARSER.with(|cell| {
+        let tree = cell.borrow_mut().parse(source, None)?;
+        let call = deepest_call_at_line(&tree.root_node(), line)?;
+        let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
+        extract_node_text(source, stmt)
+    })
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────
+
+/// Walk the tree and return the deepest call-expression-ish node whose
+/// start row is `line - 1` (0-indexed).
+fn deepest_call_at_line<'t>(
+    root: &tree_sitter::Node<'t>,
+    line: u32,
+) -> Option<tree_sitter::Node<'t>> {
+    let target_row = line.saturating_sub(1) as usize;
+    let mut best: Option<tree_sitter::Node<'t>> = None;
+    let mut cursor = root.walk();
+    let mut stack = vec![*root];
+    while let Some(node) = stack.pop() {
+        if node.start_position().row == target_row
+            && (node.kind() == "call_expression"
+                || node.kind() == "call"
+                || node.kind() == "macro_invocation")
+        {
+            best = Some(node);
+        }
+        for child in node.children(&mut cursor) {
+            if child.start_position().row <= target_row
+                && child.end_position().row >= target_row
+            {
+                stack.push(child);
+            }
+        }
+    }
+    best
+}
+
+/// Climb parents from `node` until we find an ancestor whose `kind()`
+/// is in `stop_at`, or we've climbed `MAX_ANCESTOR_HOPS` levels.
+fn climb_to_statement<'t>(
+    node: tree_sitter::Node<'t>,
+    stop_at: &[&str],
+) -> Option<tree_sitter::Node<'t>> {
+    let mut current = node;
+    for _ in 0..MAX_ANCESTOR_HOPS {
+        if stop_at.contains(&current.kind()) {
+            return Some(current);
+        }
+        current = current.parent()?;
+    }
+    None
+}
+
+/// Return the source text of `node`, capped at `MAX_CONTEXT_LINES`.
+fn extract_node_text(source: &str, node: tree_sitter::Node<'_>) -> Option<String> {
+    let text = node.utf8_text(source.as_bytes()).ok()?;
+    let lines: Vec<&str> = text.lines().collect();
+    let capped = if lines.len() > MAX_CONTEXT_LINES {
+        &lines[..MAX_CONTEXT_LINES]
+    } else {
+        &lines[..]
+    };
+    Some(capped.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Write `source` to a tempfile with the given extension and
+    /// return its path. Tempfile lives as long as the returned handle.
+    fn tempfile_with_ext(source: &str, ext: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::Builder::new()
+            .suffix(&format!(".{ext}"))
+            .tempfile()
+            .expect("tempfile");
+        f.write_all(source.as_bytes()).expect("write");
+        f
+    }
+
+    #[test]
+    fn enclosing_stmt_rust_single_line_call() {
+        let src = "fn main() {\n    let x = foo(1, 2);\n}\n";
+        let f = tempfile_with_ext(src, "rs");
+        let got = enclosing_statement(f.path(), 2).expect("some");
+        assert!(got.contains("let x = foo(1, 2)"), "got: {got:?}");
+    }
+
+    #[test]
+    fn enclosing_stmt_rust_multi_line_args() {
+        let src = "fn main() {\n    let x = foo(\n        1,\n        2,\n    );\n}\n";
+        let f = tempfile_with_ext(src, "rs");
+        let got = enclosing_statement(f.path(), 2).expect("some");
+        // The whole let-declaration (5 lines) should be returned.
+        assert!(got.contains("let x = foo("), "got: {got:?}");
+        assert!(got.contains("1,"), "got: {got:?}");
+        assert!(got.contains("2,"), "got: {got:?}");
+    }
+
+    #[test]
+    fn enclosing_stmt_python_assignment() {
+        let src = "def main():\n    result = module.func(arg)\n    return result\n";
+        let f = tempfile_with_ext(src, "py");
+        let got = enclosing_statement(f.path(), 2).expect("some");
+        assert!(got.contains("result = module.func(arg)"), "got: {got:?}");
+    }
+
+    #[test]
+    fn enclosing_stmt_typescript_return_expr() {
+        let src = "function main() {\n    return handle(req);\n}\n";
+        let f = tempfile_with_ext(src, "ts");
+        let got = enclosing_statement(f.path(), 2).expect("some");
+        assert!(got.contains("return handle(req)"), "got: {got:?}");
+    }
+
+    #[test]
+    fn enclosing_stmt_javascript_return_expr() {
+        let src = "function main() {\n    return handle(req);\n}\n";
+        let f = tempfile_with_ext(src, "js");
+        let got = enclosing_statement(f.path(), 2).expect("some");
+        assert!(got.contains("return handle(req)"), "got: {got:?}");
+    }
+
+    #[test]
+    fn enclosing_stmt_none_on_unreadable_file() {
+        let missing = std::path::Path::new("/tmp/does_not_exist_92837.rs");
+        assert!(enclosing_statement(missing, 5).is_none());
+    }
+
+    #[test]
+    fn enclosing_stmt_none_on_unsupported_language() {
+        let src = "# just a markdown\n";
+        let f = tempfile_with_ext(src, "md");
+        assert!(enclosing_statement(f.path(), 1).is_none());
+    }
+
+    #[test]
+    fn enclosing_stmt_fallback_on_ast_miss() {
+        // A call inside an odd ancestor the AST heuristic may not
+        // surface as a statement. The fallback line-window should
+        // kick in and return a non-empty string anyway.
+        let src = "fn main() {\n    match x { Some(y) => foo(y), _ => () };\n}\n";
+        let f = tempfile_with_ext(src, "rs");
+        let got = enclosing_statement(f.path(), 2).expect("some");
+        // Either we got the full match expression via expression_statement
+        // (if tree-sitter surfaces it that way), or we got the ±1 window.
+        // Either way the result must contain the call line.
+        assert!(got.contains("foo(y)"), "got: {got:?}");
+    }
+}
