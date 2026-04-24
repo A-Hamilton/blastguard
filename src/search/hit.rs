@@ -17,6 +17,11 @@ pub struct SearchHit {
     pub signature: Option<String>,
     /// Raw matching line for grep hits. `None` for structural hits.
     pub snippet: Option<String>,
+    /// Caller-site context (enclosing statement text) attached by
+    /// `callers of X with context`. Rendered with `  | ` pipe prefix
+    /// per line when emitted via `to_compact_line`. `None` for all
+    /// queries except `callers of X with context`.
+    pub context: Option<String>,
 }
 
 impl SearchHit {
@@ -29,6 +34,7 @@ impl SearchHit {
             line: symbol.line_start,
             signature: Some(symbol.signature.clone()),
             snippet: None,
+            context: None,
         }
     }
 
@@ -40,6 +46,7 @@ impl SearchHit {
             line,
             signature: None,
             snippet: Some(snippet),
+            context: None,
         }
     }
 
@@ -53,6 +60,7 @@ impl SearchHit {
             line: 0,
             signature: Some(message.to_owned()),
             snippet: None,
+            context: None,
         }
     }
 
@@ -88,10 +96,21 @@ impl SearchHit {
             (None, Some(snippet)) => snippet.trim().to_string(),
             (None, None) => String::new(),
         };
-        if body.is_empty() {
+        let head = if body.is_empty() {
             format!("{path}:{}", self.line)
         } else {
             format!("{path}:{} {body}", self.line)
+        };
+        match self.context.as_deref() {
+            Some(ctx) if !ctx.is_empty() => {
+                let indented = ctx
+                    .lines()
+                    .map(|l| format!("  | {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("{head}\n{indented}")
+            }
+            _ => head,
         }
     }
 }
@@ -228,6 +247,7 @@ mod tests_compact {
                 "callers(graph: &'g CodeGraph, target: &SymbolId): Vec<&'g SymbolId>".to_string(),
             ),
             snippet: None,
+            context: None,
         };
         let line = hit.to_compact_line(&PathBuf::from("/proj/root"));
         assert!(line.starts_with("src/graph/ops.rs:12"), "got: {line}");
@@ -245,6 +265,7 @@ mod tests_compact {
             line: 1,
             signature: Some("fn foo<'a, T: Sized>(x: &'a T) -> Vec<&'a T>".to_string()),
             snippet: None,
+            context: None,
         };
         let line = hit.to_compact_line(&PathBuf::from("/p"));
         assert!(!line.contains("'a"), "lifetime not stripped: {line}");
@@ -262,6 +283,7 @@ mod tests_compact {
             line: 5,
             signature: Some("fn bar()".to_string()),
             snippet: None,
+            context: None,
         };
         let line = hit.to_compact_line(&PathBuf::from("/proj/root"));
         assert!(line.starts_with("/other/abs/path.rs:5"), "got: {line}");
@@ -274,6 +296,7 @@ mod tests_compact {
             line: 2,
             signature: None,
             snippet: Some("let NEEDLE = 1;".to_string()),
+            context: None,
         };
         let line = hit.to_compact_line(&PathBuf::from("/p"));
         assert!(line.contains("NEEDLE"), "got: {line}");
@@ -348,5 +371,46 @@ mod tests {
         sort_by_centrality(&g, &mut ids);
         // The one with centrality=5 must come before the one missing (treated as 0).
         assert_eq!(ids[0], &only_in_centrality.id);
+    }
+
+    #[test]
+    fn to_compact_line_with_context_adds_pipe_prefix() {
+        let hit = SearchHit {
+            file: PathBuf::from("/tmp/foo.rs"),
+            line: 42,
+            signature: Some("fn caller()".to_string()),
+            snippet: None,
+            context: Some("let x = target(1, 2);".to_string()),
+        };
+        let out = hit.to_compact_line(std::path::Path::new("/tmp"));
+        assert!(out.contains("foo.rs:42 caller()"), "got: {out}");
+        assert!(out.contains("  | let x = target(1, 2);"), "got: {out}");
+    }
+
+    #[test]
+    fn to_compact_line_with_multi_line_context() {
+        let hit = SearchHit {
+            file: PathBuf::from("/tmp/foo.rs"),
+            line: 10,
+            signature: Some("fn caller()".to_string()),
+            snippet: None,
+            context: Some("let x = foo(\n    1,\n    2,\n);".to_string()),
+        };
+        let out = hit.to_compact_line(std::path::Path::new("/tmp"));
+        let context_lines: Vec<_> = out.lines().filter(|l| l.starts_with("  | ")).collect();
+        assert_eq!(context_lines.len(), 4, "got: {out}");
+    }
+
+    #[test]
+    fn to_compact_line_without_context_unchanged() {
+        let hit = SearchHit {
+            file: PathBuf::from("/tmp/foo.rs"),
+            line: 7,
+            signature: Some("fn caller()".to_string()),
+            snippet: None,
+            context: None,
+        };
+        let out = hit.to_compact_line(std::path::Path::new("/tmp"));
+        assert!(!out.contains("  | "), "no-context hit must not have pipe prefix, got: {out}");
     }
 }
