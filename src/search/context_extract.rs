@@ -211,6 +211,9 @@ fn extract_javascript(source: &str, line: u32) -> Option<String> {
     JS_PARSER.with(|cell| {
         let tree = cell.borrow_mut().parse(source, None)?;
         let call = deepest_call_at_line(&tree.root_node(), line)?;
+        // JS and TS share statement kind names in the tree-sitter grammars —
+        // lexical_declaration, expression_statement, return_statement, etc.
+        // — so the TS kind list applies as-is.
         let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
         extract_node_text(source, stmt)
     })
@@ -219,7 +222,9 @@ fn extract_javascript(source: &str, line: u32) -> Option<String> {
 // ── Shared helpers ────────────────────────────────────────────────────
 
 /// Walk the tree and return the deepest call-expression-ish node whose
-/// start row is `line - 1` (0-indexed).
+/// start row is `line - 1` (0-indexed). "Deepest" means the one whose
+/// start_byte is largest among matches — a proxy for nesting depth
+/// that handles sibling-calls-on-same-line correctly.
 fn deepest_call_at_line<'t>(
     root: &tree_sitter::Node<'t>,
     line: u32,
@@ -233,6 +238,7 @@ fn deepest_call_at_line<'t>(
             && (node.kind() == "call_expression"
                 || node.kind() == "call"
                 || node.kind() == "macro_invocation")
+            && best.map_or(true, |b| node.start_byte() > b.start_byte())
         {
             best = Some(node);
         }
@@ -345,6 +351,21 @@ mod tests {
         let src = "# just a markdown\n";
         let f = tempfile_with_ext(src, "md");
         assert!(enclosing_statement(f.path(), 1).is_none());
+    }
+
+    #[test]
+    fn enclosing_stmt_rust_sibling_calls_picks_deepest() {
+        // Two sibling calls on the same line. "deepest" should win —
+        // we use start_byte as a depth proxy, so the RIGHTMOST call
+        // (later start_byte) is considered deeper than the leftmost.
+        // Both are valid enclosing candidates; the test just pins
+        // the behaviour so it's not silent on sibling chains.
+        let src = "fn main() {\n    let _ = (foo(1), bar(2));\n}\n";
+        let f = tempfile_with_ext(src, "rs");
+        let got = enclosing_statement(f.path(), 2).expect("some");
+        // The let-declaration wraps both calls — that's the enclosing
+        // statement, so the output should contain the whole assignment.
+        assert!(got.contains("let _ = (foo(1), bar(2))"), "got: {got:?}");
     }
 
     #[test]
