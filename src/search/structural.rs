@@ -61,7 +61,7 @@ pub fn callers_of(
     name: &str,
     max_hits: usize,
     project_root: &std::path::Path,
-    _with_context: bool,
+    with_context: bool,
 ) -> Vec<SearchHit> {
     let mut targets = find_by_name(graph, name);
     if targets.is_empty() {
@@ -83,6 +83,16 @@ pub fn callers_of(
         .filter_map(|id| graph.symbols.get(id))
         .map(SearchHit::structural)
         .collect();
+
+    if with_context {
+        for hit in &mut hits {
+            if hit.is_hint() {
+                continue;
+            }
+            hit.context =
+                crate::search::context_extract::enclosing_statement(&hit.file, hit.line);
+        }
+    }
 
     // Cross-file importer hint (Phase-1.5 fallback): when resolve_calls
     // couldn't pin a function-level caller (ambiguous match or non-function
@@ -1395,5 +1405,107 @@ mod tests {
             .signature
             .as_deref()
             .is_some_and(|s| s.contains("no symbols indexed")));
+    }
+
+    #[test]
+    fn callers_of_without_context_leaves_context_field_none() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+        let mut g = CodeGraph::new();
+        let target = sym("target", "a.rs");
+        let caller = sym("caller", "b.rs");
+        insert_with_centrality(&mut g, target.clone(), 0);
+        insert_with_centrality(&mut g, caller.clone(), 0);
+        g.insert_edge(Edge {
+            from: caller.id.clone(),
+            to: target.id.clone(),
+            kind: EdgeKind::Calls,
+            line: 5,
+            confidence: Confidence::Certain,
+        });
+        let hits = callers_of(&g, "target", 10, std::path::Path::new("."), false);
+        let real: Vec<_> = hits.iter().filter(|h| !h.is_hint()).collect();
+        assert!(!real.is_empty());
+        for h in real {
+            assert!(h.context.is_none(), "expected no context, got: {:?}", h.context);
+        }
+    }
+
+    #[test]
+    fn callers_of_with_context_attaches_text() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+        use std::io::Write;
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let caller_path = tmpdir.path().join("caller.rs");
+        let caller_src = "fn caller() {\n    let _ = target(42, \"hello\");\n}\n";
+        std::fs::File::create(&caller_path)
+            .expect("create")
+            .write_all(caller_src.as_bytes())
+            .expect("write");
+
+        let mut g = CodeGraph::new();
+        let target = sym("target", tmpdir.path().join("a.rs").to_str().unwrap());
+        let mut caller = sym("caller", caller_path.to_str().unwrap());
+        caller.line_start = 1;
+        insert_with_centrality(&mut g, target.clone(), 0);
+        insert_with_centrality(&mut g, caller.clone(), 0);
+        g.insert_edge(Edge {
+            from: caller.id.clone(),
+            to: target.id.clone(),
+            kind: EdgeKind::Calls,
+            line: 2,
+            confidence: Confidence::Certain,
+        });
+        let hits = callers_of(&g, "target", 10, tmpdir.path(), true);
+        let real: Vec<_> = hits.iter().filter(|h| !h.is_hint()).collect();
+        assert_eq!(real.len(), 1);
+        let ctx = real[0].context.as_deref().expect("context attached");
+        assert!(
+            ctx.contains("target(42, \"hello\")"),
+            "expected call literal in context, got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn callers_of_respects_limit_with_context() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+        let mut g = CodeGraph::new();
+        let target = sym("target", "a.rs");
+        insert_with_centrality(&mut g, target.clone(), 0);
+        for i in 0..15u32 {
+            let caller = sym(&format!("caller{i}"), "b.rs");
+            insert_with_centrality(&mut g, caller.clone(), 0);
+            g.insert_edge(Edge {
+                from: caller.id.clone(),
+                to: target.id.clone(),
+                kind: EdgeKind::Calls,
+                line: i + 1,
+                confidence: Confidence::Certain,
+            });
+        }
+        let hits = callers_of(&g, "target", 10, std::path::Path::new("."), true);
+        let real: Vec<_> = hits.iter().filter(|h| !h.is_hint()).collect();
+        assert_eq!(real.len(), 10, "limit=10 must be respected even with context");
+    }
+
+    #[test]
+    fn callers_of_with_context_degrades_gracefully_on_missing_file() {
+        use crate::graph::types::{Confidence, Edge, EdgeKind};
+        let mut g = CodeGraph::new();
+        let target = sym("target", "does_not_exist_a.rs");
+        let caller = sym("caller", "does_not_exist_b.rs");
+        insert_with_centrality(&mut g, target.clone(), 0);
+        insert_with_centrality(&mut g, caller.clone(), 0);
+        g.insert_edge(Edge {
+            from: caller.id.clone(),
+            to: target.id.clone(),
+            kind: EdgeKind::Calls,
+            line: 5,
+            confidence: Confidence::Certain,
+        });
+        let hits = callers_of(&g, "target", 10, std::path::Path::new("."), true);
+        let real: Vec<_> = hits.iter().filter(|h| !h.is_hint()).collect();
+        assert!(!real.is_empty());
+        // No panic. Context may be None because file can't be read.
+        let _ = real[0].context.clone();
     }
 }

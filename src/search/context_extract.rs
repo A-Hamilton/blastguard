@@ -4,12 +4,6 @@
 //!
 //! See `docs/superpowers/specs/2026-04-24-callers-with-context-design.md`.
 
-// Dead-code lint: this module's items are consumed by
-// `search::structural::callers_of` which receives the `with_context` param
-// in Task 4. Until that wiring lands the items are unreachable from outside
-// the test suite.
-#![allow(dead_code)]
-
 use std::path::Path;
 
 /// Maximum context lines to return per hit. Guards against pathological
