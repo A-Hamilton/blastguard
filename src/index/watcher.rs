@@ -164,11 +164,16 @@ fn handle_event(
     let Some(language) = detect_language(path) else {
         return;
     };
+    let self_crate_name = crate::index::indexer::read_crate_name(project_root);
     let parsed = match language {
         Language::TypeScript => crate::parse::typescript::extract(path, &source),
         Language::JavaScript => crate::parse::javascript::extract(path, &source),
         Language::Python => crate::parse::python::extract(path, &source),
-        Language::Rust => crate::parse::rust::extract(path, &source),
+        Language::Rust => crate::parse::rust::extract_with_crate_name(
+            path,
+            &source,
+            self_crate_name.as_deref(),
+        ),
     };
 
     // Fix A: degrade gracefully if the lock is poisoned instead of panicking.

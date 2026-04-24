@@ -57,6 +57,21 @@ thread_local! {
 /// unreachable in a correctly-built binary).
 #[must_use = "parsed symbols and imports should be ingested into the graph"]
 pub fn extract(path: &Path, source: &str) -> ParseOutput {
+    extract_with_crate_name(path, source, None)
+}
+
+/// Same as [`extract`] but with an optional self-crate name so that
+/// `use <self_crate>::foo::bar` imports from Rust integration tests
+/// (`tests/*.rs` are compiled as separate crates linking our own
+/// package) are registered as intra-crate `Imports` edges instead of
+/// being buried in `library_imports`. When `self_crate_name` is `None`,
+/// behaviour is identical to the original `extract`.
+#[must_use = "parsed symbols and imports should be ingested into the graph"]
+pub fn extract_with_crate_name(
+    path: &Path,
+    source: &str,
+    self_crate_name: Option<&str>,
+) -> ParseOutput {
     RS_STATE.with(|cell| {
         let mut state = cell.borrow_mut();
         let (parser, query) = &mut *state;
@@ -93,7 +108,7 @@ pub fn extract(path: &Path, source: &str) -> ParseOutput {
                     "mod.decl" => emit_simple(node, source, path, &mut out, SymbolKind::Module),
                     "use.path" => {
                         let text = node.utf8_text(src_bytes).unwrap_or("");
-                        emit_use(text, node, path, &mut out);
+                        emit_use(text, node, path, &mut out, self_crate_name);
                     }
                     "call.callee" => {
                         emit_call(node, source, path, &mut out, &mut seen_calls);
@@ -218,7 +233,13 @@ fn emit_simple(
 /// `"std::collections::HashMap"` or `"crate::utils::helper"`.
 /// Task 11's import resolver will rewrite `to.file` on `Imports` edges to the
 /// canonical on-disk path.
-fn emit_use(path_text: &str, node: tree_sitter::Node<'_>, path: &Path, out: &mut ParseOutput) {
+fn emit_use(
+    path_text: &str,
+    node: tree_sitter::Node<'_>,
+    path: &Path,
+    out: &mut ParseOutput,
+    self_crate_name: Option<&str>,
+) {
     if path_text.is_empty() {
         return;
     }
@@ -232,6 +253,45 @@ fn emit_use(path_text: &str, node: tree_sitter::Node<'_>, path: &Path, out: &mut
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_owned();
+
+    // Check if `head` equals our own crate's name (from Cargo.toml). Rust
+    // integration tests at `tests/*.rs` are compiled as separate crates
+    // and import the library via `use <cratename>::...` — which would
+    // otherwise be misclassified as an external library. Rewrite to
+    // `crate::...` form so the existing resolver handles it normally.
+    let rewritten_path: Option<String> = self_crate_name.and_then(|name| {
+        if head == name {
+            let rest = path_text
+                .strip_prefix(name)
+                .and_then(|s| s.strip_prefix("::"))
+                .unwrap_or("");
+            Some(if rest.is_empty() {
+                "crate".to_string()
+            } else {
+                format!("crate::{rest}")
+            })
+        } else {
+            None
+        }
+    });
+    if let Some(rewritten) = rewritten_path {
+        out.edges.push(Edge {
+            from: SymbolId {
+                file: path.to_path_buf(),
+                name: module_name,
+                kind: SymbolKind::Module,
+            },
+            to: SymbolId {
+                file: std::path::PathBuf::from(rewritten),
+                name: String::new(),
+                kind: SymbolKind::Module,
+            },
+            kind: EdgeKind::Imports,
+            line,
+            confidence: Confidence::Unresolved,
+        });
+        return;
+    }
 
     match head {
         "crate" | "self" | "super" => {
@@ -694,5 +754,66 @@ fn also_good() -> i32 { 2 }
         assert!(out.partial_parse);
         assert!(out.symbols.iter().any(|s| s.id.name == "good"));
         assert!(out.symbols.iter().any(|s| s.id.name == "also_good"));
+    }
+
+    #[test]
+    fn extract_with_crate_name_rewrites_self_crate_use() {
+        // Integration-test pattern: tests/*.rs imports the library via the
+        // crate's external name. Historically classified as library_imports;
+        // crate-aware extract should rewrite to an intra-crate Imports edge.
+        let src = "use blastguard::edit::apply_change;\n";
+        let out = extract_with_crate_name(
+            &PathBuf::from("tests/integration_apply_change.rs"),
+            src,
+            Some("blastguard"),
+        );
+        assert!(
+            out.edges.iter().any(|e| e.kind == EdgeKind::Imports
+                && e.to.file.to_string_lossy().contains("crate::edit::apply_change")),
+            "expected intra-crate Imports edge, got: {:?}",
+            out.edges
+        );
+        assert!(
+            !out.library_imports.iter().any(|li| li.library == "blastguard"),
+            "expected blastguard NOT in library_imports, got: {:?}",
+            out.library_imports
+        );
+    }
+
+    #[test]
+    fn extract_with_crate_name_leaves_external_use_alone() {
+        // Regression: other external crates (tokio, std) must still go to
+        // library_imports unchanged.
+        let src = "use tokio::spawn;\nuse std::path::Path;\n";
+        let out = extract_with_crate_name(
+            &PathBuf::from("src/main.rs"),
+            src,
+            Some("blastguard"),
+        );
+        assert!(out.library_imports.iter().any(|li| li.library == "tokio"));
+        assert!(out.library_imports.iter().any(|li| li.library == "std"));
+    }
+
+    #[test]
+    fn extract_with_none_crate_name_is_backward_compatible() {
+        // When crate name is unknown (e.g. no Cargo.toml), behaviour matches
+        // pre-feature `extract` exactly: foreign-named paths land in
+        // library_imports.
+        let src = "use blastguard::edit::apply_change;\n";
+        let out = extract_with_crate_name(
+            &PathBuf::from("tests/integration.rs"),
+            src,
+            None,
+        );
+        assert!(out.library_imports.iter().any(|li| li.library == "blastguard"));
+    }
+
+    #[test]
+    fn extract_without_crate_name_unchanged_by_feature() {
+        // Existing `extract` entry point (no crate-name arg) continues to
+        // work as a thin shim over extract_with_crate_name(None).
+        let src = "use blastguard::foo;\n";
+        let out = extract(&PathBuf::from("tests/integration.rs"), src);
+        assert!(out.library_imports.iter().any(|li| li.library == "blastguard"));
     }
 }
