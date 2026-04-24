@@ -13,7 +13,7 @@ use regex::Regex;
 /// Parsed query kind. The dispatcher routes on this enum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryKind {
-    /// `callers of X` (with_context=false) / `callers of X with context` (with_context=true).
+    /// `callers of X` (`with_context=false`) / `callers of X with context` (`with_context=true`).
     Callers(String, bool),
     /// `callees of X` / `what does X call` — forward-edge lookup.
     Callees(String),

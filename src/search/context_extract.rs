@@ -217,7 +217,7 @@ fn extract_javascript(source: &str, line: u32) -> Option<String> {
 
 /// Walk the tree and return the deepest call-expression-ish node whose
 /// start row is `line - 1` (0-indexed). "Deepest" means the one whose
-/// start_byte is largest among matches — a proxy for nesting depth
+/// `start_byte` is largest among matches — a proxy for nesting depth
 /// that handles sibling-calls-on-same-line correctly.
 fn deepest_call_at_line<'t>(
     root: &tree_sitter::Node<'t>,
@@ -232,7 +232,7 @@ fn deepest_call_at_line<'t>(
             && (node.kind() == "call_expression"
                 || node.kind() == "call"
                 || node.kind() == "macro_invocation")
-            && best.map_or(true, |b| node.start_byte() > b.start_byte())
+            && best.is_none_or(|b| node.start_byte() > b.start_byte())
         {
             best = Some(node);
         }
