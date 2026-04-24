@@ -33,6 +33,13 @@ alternatives in these situations:
   `blastguard_search '{"query":"callers of NAME"}'`. Returns structured
   caller list including cross-file callers (unambiguous-name targets
   only; ambiguous names fall back to a per-importer-file hint).
+- "What does X get called WITH (argument values at call sites)?" →
+  `blastguard_search '{"query":"callers of NAME with context"}'`.
+  Same structured caller list, BUT each hit also includes the
+  enclosing statement text around the call so you can see the
+  actual argument literals without a follow-up `read_file`. Use
+  this when the question is about call-site details (what values
+  are passed), not just who calls.
 - "Where is this symbol defined?" →
   `blastguard_search '{"query":"find NAME"}'`. Fuzzy name lookup over the
   code graph, returns file:line + signature.
