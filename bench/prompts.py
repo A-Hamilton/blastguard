@@ -62,6 +62,27 @@ cross-file dependency exploration, writing brand-new files, running ad-hoc
 bash commands (`ls`, `cat`, env inspection). Do not re-grep for a symbol
 you can ask BlastGuard about.
 
+KNOWN BLASTGUARD GAPS — use native tools to fill these in:
+
+- **Argument values at call sites.** `callers of X` returns file:line +
+  signature, but the ACTUAL arguments passed at the call site live in
+  the caller's function body. If the question is "what does X get
+  called WITH", follow the caller list with a targeted `read_file` of
+  the caller's file around the hit line (±3 lines).
+
+- **Mentions in docs/comments.** BlastGuard indexes symbols, not
+  comment or docstring text. If a question asks "what references X"
+  in a broad sense (including docstrings, module comments, string
+  literals), also `grep` for the name — BlastGuard's `callers of`
+  only finds graph-level call edges.
+
+- **Integration tests that exercise X via API.** `tests for FILE`
+  catches intra-file test callers, but integration tests in `tests/*`
+  often exercise a module by importing it and calling through the
+  public API without direct call edges to internal functions. If the
+  question is "what tests cover X", ALSO scan `tests/` directly with
+  `grep` or `ls tests/` + `read_file`.
+
 IMPORTANT — EFFICIENCY RULES:
 
 1. ONE TOOL PER QUESTION. If `blastguard_search 'outline of X'` already
