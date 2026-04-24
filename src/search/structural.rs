@@ -127,6 +127,7 @@ pub fn callers_of(
                 target_rel.display()
             )),
             snippet: None,
+            context: None,
         });
     }
 
@@ -376,6 +377,7 @@ pub fn imports_of(
                     line: e.line,
                     signature: Some(format!("imports {}", rel.display())),
                     snippet: None,
+                    context: None,
                 });
             }
         }
@@ -415,6 +417,7 @@ pub fn importers_of(
                 line: e.line,
                 signature: Some(format!("imports {}", rel.display())),
                 snippet: None,
+                context: None,
             });
         }
     }
@@ -451,6 +454,7 @@ pub fn libraries(graph: &CodeGraph, project_root: &std::path::Path) -> Vec<Searc
             line: 0,
             signature: Some(format!("{lib} ({count} uses)")),
             snippet: None,
+            context: None,
         })
         .collect()
 }
