@@ -12,6 +12,23 @@ use crate::graph::types::CodeGraph;
 use crate::parse::{detect_language, Language, ParseOutput};
 use crate::Result;
 
+/// Read the `[package].name` field from `project_root/Cargo.toml`. Returns
+/// `None` for non-Rust projects or malformed manifests — the caller
+/// gracefully falls back to the pre-crate-aware behaviour.
+///
+/// One-time cost per cold index (~1ms); not called on the hot path.
+#[must_use]
+pub(crate) fn read_crate_name(project_root: &Path) -> Option<String> {
+    let manifest = project_root.join("Cargo.toml");
+    let bytes = std::fs::read_to_string(&manifest).ok()?;
+    let parsed: toml::Value = toml::from_str(&bytes).ok()?;
+    parsed
+        .get("package")?
+        .get("name")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
 /// Walk `project_root` respecting `.gitignore`, returning only files that
 /// one of the language drivers can parse (via [`detect_language`]).
 ///
@@ -51,6 +68,12 @@ pub fn walk_project(project_root: &Path) -> Vec<PathBuf> {
 pub fn cold_index(project_root: &Path) -> Result<CodeGraph> {
     let files = walk_project(project_root);
 
+    // Read the crate's own name from Cargo.toml once so the Rust parser
+    // can recognise `use <self_crate>::...` imports (common in
+    // tests/*.rs integration tests) as intra-crate rather than
+    // external-library.
+    let self_crate_name = read_crate_name(project_root);
+
     let parses: Vec<ParseOutput> = files
         .par_iter()
         .filter_map(|path| match std::fs::read_to_string(path) {
@@ -60,7 +83,11 @@ pub fn cold_index(project_root: &Path) -> Result<CodeGraph> {
                     Language::TypeScript => crate::parse::typescript::extract(path, &source),
                     Language::JavaScript => crate::parse::javascript::extract(path, &source),
                     Language::Python => crate::parse::python::extract(path, &source),
-                    Language::Rust => crate::parse::rust::extract(path, &source),
+                    Language::Rust => crate::parse::rust::extract_with_crate_name(
+                        path,
+                        &source,
+                        self_crate_name.as_deref(),
+                    ),
                 };
                 Some(out)
             }
