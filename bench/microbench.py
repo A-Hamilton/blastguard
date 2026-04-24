@@ -512,7 +512,18 @@ def run_task(
             final_answer = content_text
             stopped_reason = "finish_stop"
             break
+        # No tools, no DONE marker, and finish_reason != "stop" (typically
+        # "length" — the model hit max_tokens mid-response). Looping would
+        # send a dangling assistant message as the next request, which
+        # thinking-mode llama.cpp rejects as "prefill is incompatible with
+        # enable_thinking" (Gap 6). Even on non-thinking-mode backends,
+        # continuing from a prefilled partial response is lossy — the model
+        # rarely picks up cleanly. Record the rollout as implicitly stopped
+        # and exit. This is Gap 6 Option 1 — the root-cause fix that
+        # complements the Option 3 defensive catch already in place.
         final_answer = content_text
+        stopped_reason = f"truncated_{choice.finish_reason or 'unknown'}"
+        break
 
     wall = time.time() - t0
     input_cost = total_in * in_price / 1_000_000.0
