@@ -85,12 +85,39 @@ pub fn callers_of(
         .collect();
 
     if with_context {
+        // Per-hit context uses the CALL-SITE line from the graph edge,
+        // not the caller's definition line (which is hit.line). The
+        // caller's `fn foo(...)` declaration is on hit.line; the actual
+        // call to the target lives further down inside the body. Look
+        // up the edge in reverse_edges[target_id] where edge.from ==
+        // caller_id to get the right line.
+        let edge_line_for_caller: std::collections::HashMap<&SymbolId, u32> = graph
+            .reverse_edges
+            .get(target_id)
+            .map(|edges| {
+                edges
+                    .iter()
+                    .filter(|e| e.kind == EdgeKind::Calls)
+                    .map(|e| (&e.from, e.line))
+                    .collect()
+            })
+            .unwrap_or_default();
         for hit in &mut hits {
             if hit.is_hint() {
                 continue;
             }
-            hit.context =
-                crate::search::context_extract::enclosing_statement(&hit.file, hit.line);
+            // Find the caller symbol for this hit's file + line_start
+            // pairing, then look up its edge line.
+            let caller_id = graph.symbols.iter().find_map(|(id, sym)| {
+                (sym.id.file == hit.file && sym.line_start == hit.line).then_some(id)
+            });
+            let call_site_line = caller_id
+                .and_then(|id| edge_line_for_caller.get(id).copied())
+                .unwrap_or(hit.line); // fallback: caller def line
+            hit.context = crate::search::context_extract::enclosing_statement(
+                &hit.file,
+                call_site_line,
+            );
         }
     }
 
