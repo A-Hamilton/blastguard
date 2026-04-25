@@ -200,10 +200,39 @@ fn compact_signature(sig: &str) -> String {
     if !trimmed.contains("->") {
         if let Some(idx) = trimmed.rfind("):") {
             let (head, tail) = trimmed.split_at(idx + 1);
-            return format!("{head} ->{}", &tail[1..]);
+            return collapse_newlines(&format!("{head} ->{}", &tail[1..]));
         }
     }
-    trimmed.to_string()
+    collapse_newlines(trimmed)
+}
+
+/// Collapse internal newlines and surrounding whitespace into single spaces.
+/// Multi-line signatures (e.g. `fn foo(\n    x: i32,\n)`) become single-line
+/// (`fn foo(x: i32,)`) — agents get the same information in far fewer tokens.
+fn collapse_newlines(sig: &str) -> String {
+    if !sig.contains('\n') {
+        return sig.to_string();
+    }
+    let mut out = String::with_capacity(sig.len());
+    let mut prev_was_newline = false;
+    for c in sig.chars() {
+        match c {
+            '\n' => {
+                if !prev_was_newline {
+                    out.push(' ');
+                    prev_was_newline = true;
+                }
+            }
+            ' ' if prev_was_newline => {
+                // Skip trailing spaces after newline replacement.
+            }
+            _ => {
+                out.push(c);
+                prev_was_newline = false;
+            }
+        }
+    }
+    out
 }
 
 /// `'` starts a lifetime when it is followed immediately by an ASCII letter or `_`.
