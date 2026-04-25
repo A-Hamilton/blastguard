@@ -769,12 +769,17 @@ fn also_good() -> i32 { 2 }
         );
         assert!(
             out.edges.iter().any(|e| e.kind == EdgeKind::Imports
-                && e.to.file.to_string_lossy().contains("crate::edit::apply_change")),
+                && e.to
+                    .file
+                    .to_string_lossy()
+                    .contains("crate::edit::apply_change")),
             "expected intra-crate Imports edge, got: {:?}",
             out.edges
         );
         assert!(
-            !out.library_imports.iter().any(|li| li.library == "blastguard"),
+            !out.library_imports
+                .iter()
+                .any(|li| li.library == "blastguard"),
             "expected blastguard NOT in library_imports, got: {:?}",
             out.library_imports
         );
@@ -785,11 +790,7 @@ fn also_good() -> i32 { 2 }
         // Regression: other external crates (tokio, std) must still go to
         // library_imports unchanged.
         let src = "use tokio::spawn;\nuse std::path::Path;\n";
-        let out = extract_with_crate_name(
-            &PathBuf::from("src/main.rs"),
-            src,
-            Some("blastguard"),
-        );
+        let out = extract_with_crate_name(&PathBuf::from("src/main.rs"), src, Some("blastguard"));
         assert!(out.library_imports.iter().any(|li| li.library == "tokio"));
         assert!(out.library_imports.iter().any(|li| li.library == "std"));
     }
@@ -800,12 +801,11 @@ fn also_good() -> i32 { 2 }
         // pre-feature `extract` exactly: foreign-named paths land in
         // library_imports.
         let src = "use blastguard::edit::apply_change;\n";
-        let out = extract_with_crate_name(
-            &PathBuf::from("tests/integration.rs"),
-            src,
-            None,
-        );
-        assert!(out.library_imports.iter().any(|li| li.library == "blastguard"));
+        let out = extract_with_crate_name(&PathBuf::from("tests/integration.rs"), src, None);
+        assert!(out
+            .library_imports
+            .iter()
+            .any(|li| li.library == "blastguard"));
     }
 
     #[test]
@@ -814,6 +814,9 @@ fn also_good() -> i32 { 2 }
         // work as a thin shim over extract_with_crate_name(None).
         let src = "use blastguard::foo;\n";
         let out = extract(&PathBuf::from("tests/integration.rs"), src);
-        assert!(out.library_imports.iter().any(|li| li.library == "blastguard"));
+        assert!(out
+            .library_imports
+            .iter()
+            .any(|li| li.library == "blastguard"));
     }
 }

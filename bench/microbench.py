@@ -30,9 +30,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Tasks — imported from the centralized registry.
 # ---------------------------------------------------------------------------
-
 from bench.tasks_registry import TASKS  # noqa: E402
-
 
 # Optional BlastGuard-arm steering — appended to the BG arm's system prompt
 # when `--bias` is passed. Mirrors bench/prompts.py::BLASTGUARD_BIAS but
@@ -706,6 +704,7 @@ def main() -> int:
     # Priority 1b — LLM-as-judge pairwise ranking (opt-in).
     if args.run_judge:
         from openai import OpenAI  # noqa: PLC0415
+
         from bench.microbench_judge import aggregate_verdicts, judge_pair  # noqa: PLC0415
 
         judge_client = OpenAI(
@@ -717,7 +716,7 @@ def main() -> int:
         judge_model = args.model_id_override or args.model
 
         # Pair up same-(task, seed) rollouts from raw + blastguard arms.
-        by_key: dict[tuple[str, int], dict[str, "RunResult"]] = {}
+        by_key: dict[tuple[str, int], dict[str, RunResult]] = {}
         for r in results:
             by_key.setdefault((r.task_id, r.seed), {})[r.arm] = r
 
@@ -764,3 +763,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

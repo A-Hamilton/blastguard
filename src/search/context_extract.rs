@@ -237,9 +237,7 @@ fn deepest_call_at_line<'t>(
             best = Some(node);
         }
         for child in node.children(&mut cursor) {
-            if child.start_position().row <= target_row
-                && child.end_position().row >= target_row
-            {
+            if child.start_position().row <= target_row && child.end_position().row >= target_row {
                 stack.push(child);
             }
         }

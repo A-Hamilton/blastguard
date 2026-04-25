@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from bench.validate_verdict import load_baseline, load_judge, load_run
 
 

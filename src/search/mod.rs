@@ -7,12 +7,12 @@
 //! - [`structural`] — graph-backed implementations of each `QueryKind` (Tasks 3-11)
 //! - [`text`] — regex grep fallback via the `ignore` crate (Task 12)
 
+pub(crate) mod context_extract;
 pub mod dispatcher;
 pub mod hit;
 pub mod query;
 pub mod structural;
 pub mod text;
-pub(crate) mod context_extract;
 
 pub use dispatcher::dispatch;
 pub use hit::SearchHit;

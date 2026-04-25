@@ -411,6 +411,9 @@ mod tests {
             context: None,
         };
         let out = hit.to_compact_line(std::path::Path::new("/tmp"));
-        assert!(!out.contains("  | "), "no-context hit must not have pipe prefix, got: {out}");
+        assert!(
+            !out.contains("  | "),
+            "no-context hit must not have pipe prefix, got: {out}"
+        );
     }
 }

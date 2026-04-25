@@ -114,10 +114,8 @@ pub fn callers_of(
             let call_site_line = caller_id
                 .and_then(|id| edge_line_for_caller.get(id).copied())
                 .unwrap_or(hit.line); // fallback: caller def line
-            hit.context = crate::search::context_extract::enclosing_statement(
-                &hit.file,
-                call_site_line,
-            );
+            hit.context =
+                crate::search::context_extract::enclosing_statement(&hit.file, call_site_line);
         }
     }
 
@@ -258,10 +256,7 @@ fn chain_to_file_path(graph: &CodeGraph, from_id: &SymbolId, to_path: &str) -> V
     let target = Path::new(to_path);
 
     // File not indexed at all → useful hint so the agent doesn't retry blindly.
-    let any_symbol_in_file = graph
-        .symbols
-        .keys()
-        .any(|id| id.file.ends_with(target));
+    let any_symbol_in_file = graph.symbols.keys().any(|id| id.file.ends_with(target));
     if !any_symbol_in_file {
         return vec![SearchHit::empty_hint(&format!(
             "no symbols indexed in {to_path}; try `outline of {to_path}` or check the path spelling"
@@ -317,9 +312,8 @@ fn chain_to_file_path(graph: &CodeGraph, from_id: &SymbolId, to_path: &str) -> V
         }
     }
     // Centrality-sorted, highest first.
-    candidates.sort_by_key(|s| {
-        std::cmp::Reverse(graph.centrality.get(&s.id).copied().unwrap_or(0))
-    });
+    candidates
+        .sort_by_key(|s| std::cmp::Reverse(graph.centrality.get(&s.id).copied().unwrap_or(0)));
     let overflow = candidates.len().saturating_sub(CHAIN_FILE_CANDIDATE_CAP);
     for sym in candidates.into_iter().take(CHAIN_FILE_CANDIDATE_CAP) {
         hits.push(SearchHit::structural(sym));
@@ -1392,7 +1386,8 @@ mod tests {
         insert_with_centrality(&mut g, sym("island", "src/unreachable.rs"), 0);
         let hits = chain_from_to(&g, "caller", "src/unreachable.rs");
         assert!(
-            hits.iter().any(|h| h.file == std::path::Path::new("src/a.rs")),
+            hits.iter()
+                .any(|h| h.file == std::path::Path::new("src/a.rs")),
             "expected `from` hit, got {hits:?}"
         );
         assert!(
@@ -1421,8 +1416,12 @@ mod tests {
         });
         let hits = chain_from_to(&g, "a", "src/x.rs");
         // Chain is just [a] (already in target), candidates include b.
-        assert!(hits.iter().any(|h| h.signature.as_deref() == Some("fn a(x: i32)")));
-        assert!(hits.iter().any(|h| h.signature.as_deref() == Some("fn b(x: i32)")));
+        assert!(hits
+            .iter()
+            .any(|h| h.signature.as_deref() == Some("fn a(x: i32)")));
+        assert!(hits
+            .iter()
+            .any(|h| h.signature.as_deref() == Some("fn b(x: i32)")));
     }
 
     #[test]
@@ -1457,7 +1456,11 @@ mod tests {
         let real: Vec<_> = hits.iter().filter(|h| !h.is_hint()).collect();
         assert!(!real.is_empty());
         for h in real {
-            assert!(h.context.is_none(), "expected no context, got: {:?}", h.context);
+            assert!(
+                h.context.is_none(),
+                "expected no context, got: {:?}",
+                h.context
+            );
         }
     }
 
@@ -1515,7 +1518,11 @@ mod tests {
         }
         let hits = callers_of(&g, "target", 10, std::path::Path::new("."), true);
         let real: Vec<_> = hits.iter().filter(|h| !h.is_hint()).collect();
-        assert_eq!(real.len(), 10, "limit=10 must be respected even with context");
+        assert_eq!(
+            real.len(),
+            10,
+            "limit=10 must be respected even with context"
+        );
     }
 
     #[test]

@@ -220,8 +220,9 @@ mod tests {
         g.insert_symbol(c.clone());
         connect(&mut g, &a, &b);
         connect(&mut g, &b, &c);
-        let path = shortest_path_to_predicate(&g, &a.id, |id| id.file == std::path::Path::new("y.ts"))
-            .expect("reachable");
+        let path =
+            shortest_path_to_predicate(&g, &a.id, |id| id.file == std::path::Path::new("y.ts"))
+                .expect("reachable");
         assert_eq!(path.len(), 3);
         assert_eq!(path[0], a.id);
         assert_eq!(path[2], c.id);
