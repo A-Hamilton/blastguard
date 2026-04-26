@@ -33,7 +33,7 @@ pub fn find(graph: &CodeGraph, name: &str, max_hits: usize, project_root: &Path)
         .into_iter()
         .take(max_hits)
         .filter_map(|id| graph.symbols.get(id))
-        .map(SearchHit::structural)
+        .map(|s| SearchHit::structural(s).without_return_type())
         .collect();
 
     // Prepend a count header so the agent has immediate completeness
