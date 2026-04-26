@@ -17,7 +17,7 @@ pub const GREP_MAX_HITS: usize = 30;
 
 /// Regex grep across the project respecting `.gitignore`. Caps at
 /// [`GREP_MAX_HITS`] matches. Returns `file:line` plus the matching line as
-/// `snippet` (trailing whitespace trimmed).
+/// `snippet` (leading and trailing whitespace trimmed).
 ///
 /// Invalid regex patterns are retried as literal-string searches via
 /// [`regex::escape`]; if that also fails (impossible in practice — escaping
@@ -62,7 +62,7 @@ pub fn grep(project_root: &Path, pattern: &str) -> Vec<SearchHit> {
             };
             if re.is_match(&line) {
                 let lineno = u32::try_from(idx).unwrap_or(u32::MAX).saturating_add(1);
-                let snippet: String = line.trim_end().chars().take(120).collect();
+                let snippet: String = line.trim().chars().take(120).collect();
                 files.insert(entry.path().to_path_buf());
                 hits.push(SearchHit::grep(entry.path().to_path_buf(), lineno, snippet));
             }
