@@ -18,11 +18,38 @@ pub fn find(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
         ))];
     }
     sort_by_centrality(graph, &mut ids);
-    ids.into_iter()
+    let mut hits: Vec<SearchHit> = ids
+        .into_iter()
         .take(max_hits)
         .filter_map(|id| graph.symbols.get(id))
         .map(SearchHit::structural)
-        .collect()
+        .collect();
+
+    // Prepend a count header so the agent has immediate completeness
+    // confidence, reducing distrust-driven re-queries (same pattern as
+    // callers_of count header which saved -31.88% on callers-apply-edit).
+    let symbol_count = hits.len();
+    let file_count = {
+        let mut files: std::collections::BTreeSet<&std::path::Path> =
+            std::collections::BTreeSet::new();
+        for h in &hits {
+            if !h.file.as_os_str().is_empty() {
+                files.insert(h.file.as_path());
+            }
+        }
+        files.len()
+    };
+    let count_hint = if symbol_count > 0 {
+        format!(
+            "=== {symbol_count} symbol{} matching '{name}' in {file_count} file{} ===",
+            if symbol_count == 1 { "" } else { "s" },
+            if file_count == 1 { "" } else { "s" },
+        )
+    } else {
+        format!("=== 0 symbols matching '{name}' ===")
+    };
+    hits.insert(0, SearchHit::empty_hint(&count_hint));
+    hits
 }
 
 /// Caller lookup by pre-resolved [`SymbolId`]. Used by Plan 3's
@@ -905,11 +932,13 @@ mod tests {
         insert_with_centrality(&mut g, sym("process", "a.ts"), 5);
 
         let hits = find(&g, "process", 10);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].file, PathBuf::from("a.ts"));
-        assert_eq!(hits[0].line, 10);
-        assert_eq!(hits[0].signature.as_deref(), Some("fn process(x: i32)"));
-        assert!(hits[0].snippet.is_none());
+        assert_eq!(hits.len(), 2, "count header + 1 match");
+        assert!(hits[0].is_hint());
+        assert!(hits[0].signature.as_deref().unwrap().contains("1 symbol"));
+        assert_eq!(hits[1].file, PathBuf::from("a.ts"));
+        assert_eq!(hits[1].line, 10);
+        assert_eq!(hits[1].signature.as_deref(), Some("fn process(x: i32)"));
+        assert!(hits[1].snippet.is_none());
     }
 
     #[test]
@@ -918,8 +947,10 @@ mod tests {
         insert_with_centrality(&mut g, sym("procss", "b.ts"), 1);
 
         let hits = find(&g, "process", 10);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].signature.as_deref(), Some("fn procss(x: i32)"));
+        assert_eq!(hits.len(), 2, "count header + 1 match");
+        assert!(hits[0].is_hint());
+        assert!(hits[0].signature.as_deref().unwrap().contains("1 symbol"));
+        assert_eq!(hits[1].signature.as_deref(), Some("fn procss(x: i32)"));
     }
 
     #[test]
@@ -929,9 +960,11 @@ mod tests {
         insert_with_centrality(&mut g, sym("process", "high.ts"), 100);
 
         let hits = find(&g, "process", 10);
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].file, PathBuf::from("high.ts"));
-        assert_eq!(hits[1].file, PathBuf::from("low.ts"));
+        assert_eq!(hits.len(), 3, "count header + 2 matches");
+        assert!(hits[0].is_hint());
+        assert!(hits[0].signature.as_deref().unwrap().contains("2 symbols"));
+        assert_eq!(hits[1].file, PathBuf::from("high.ts"));
+        assert_eq!(hits[2].file, PathBuf::from("low.ts"));
     }
 
     #[test]
@@ -941,7 +974,7 @@ mod tests {
             insert_with_centrality(&mut g, sym("dup", &format!("f{i}.ts")), i);
         }
         let hits = find(&g, "dup", 5);
-        assert_eq!(hits.len(), 5);
+        assert_eq!(hits.len(), 6, "count header + 5 hits");
     }
 
     #[test]
@@ -1504,10 +1537,11 @@ mod tests {
             });
         }
 
-        // `find hi` returns the high-centrality hit first (only one match).
+        // `find hi` returns the high-centrality hit first (header + 1 match).
         let find_hits = find(&g, "hi", 10);
-        assert_eq!(find_hits.len(), 1);
-        assert_eq!(find_hits[0].file, PathBuf::from("hi.ts"));
+        assert_eq!(find_hits.len(), 2, "count header + 1 match");
+        assert!(find_hits[0].is_hint());
+        assert_eq!(find_hits[1].file, PathBuf::from("hi.ts"));
 
         // `callers of target` orders hi before lo because hi has centrality 100.
         // Hit 0 is the count header, hits 1-2 are the callers.
