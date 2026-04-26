@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 const MAX_CONTEXT_LINES: usize = 20;
 
 /// Maximum ancestor hops before giving up and falling back to the
-/// line-window heuristic. Tree-sitter ASTs are typically shallow
-/// around a call expression; 8 covers realistic nesting.
-const MAX_ANCESTOR_HOPS: usize = 8;
+/// line-window heuristic. Tree-sitter ASTs can have deeper nesting
+/// through closures, match arms, and if-let bindings; 16 covers it.
+const MAX_ANCESTOR_HOPS: usize = 16;
 
 /// Maximum entries in the thread-local parse cache. Bounded to prevent
 /// memory drift across many `callers_of` invocations. 16 entries covers
