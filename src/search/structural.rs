@@ -607,7 +607,51 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
             hit.signature = Some(tagged);
         }
     }
-    hits
+
+    // Collapse consecutive test-function entries (names starting with `test_`)
+    // into a single `[test] (N functions)` summary entry. Test functions make
+    // up 30-60% of public symbols in Rust test-heavy files but carry minimal
+    // orientation value — agents outline to understand the API surface, then
+    // call specific tests by name via `find`.
+    let mut collapsed: Vec<SearchHit> = Vec::with_capacity(hits.len());
+    let mut i = 0;
+    while i < hits.len() {
+        let Some(sig) = hits[i].signature.as_deref() else {
+            collapsed.push(hits[i].clone());
+            i += 1;
+            continue;
+        };
+        let name = extract_fn_name(sig);
+        if name.starts_with("test_") {
+            let group_start = i;
+            let mut count = 1;
+            i += 1;
+            while i < hits.len() {
+                let Some(next_sig) = hits[i].signature.as_deref() else {
+                    break;
+                };
+                let next_name = extract_fn_name(next_sig);
+                if !next_name.starts_with("test_") {
+                    break;
+                }
+                count += 1;
+                i += 1;
+            }
+            if count >= 2 {
+                let first = &hits[group_start];
+                collapsed.push(SearchHit {
+                    signature: Some(format!("[test] ({count} functions)")),
+                    ..first.clone()
+                });
+            } else {
+                collapsed.push(hits[group_start].clone());
+            }
+        } else {
+            collapsed.push(hits[i].clone());
+            i += 1;
+        }
+    }
+    collapsed
 }
 
 /// Extract the bare function name from a signature string for dedup purposes.
