@@ -174,6 +174,8 @@ fn compact_signature(sig: &str) -> String {
         if chars[j] == ':'
             && j > 0
             && chars[j - 1].is_ascii_alphanumeric()
+            && j + 1 < chars.len()
+            && chars[j + 1] != ':'
             && inside_generics(&chars, j)
         {
             // Skip to the next `,` or `>` at depth 0 relative to where we are.
@@ -329,6 +331,29 @@ mod tests_compact {
         };
         let line = hit.to_compact_line(&PathBuf::from("/p"));
         assert!(line.contains("NEEDLE"), "got: {line}");
+    }
+
+    #[test]
+    fn compact_line_preserves_namespace_paths_inside_generics() {
+        let hit = SearchHit {
+            file: PathBuf::from("/p/a.rs"),
+            line: 1,
+            signature: Some(
+                "fn resolve_sibling_module(current_file: &Path, head: &str) -> Option<std::path::PathBuf>"
+                    .to_string(),
+            ),
+            snippet: None,
+            context: None,
+        };
+        let line = hit.to_compact_line(&PathBuf::from("/p"));
+        assert!(
+            line.contains("std::path::PathBuf"),
+            "namespace paths inside generics must survive: {line}"
+        );
+        assert!(
+            !line.contains("Option<std>"),
+            "Option<std> is a corrupted signature: {line}"
+        );
     }
 }
 
