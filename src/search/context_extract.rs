@@ -325,6 +325,75 @@ fn extract_node_text(source: &str, node: tree_sitter::Node<'_>) -> Option<String
     Some(capped.join("\n"))
 }
 
+/// Extract the argument expressions from a call to `callee_name` at
+/// `call_site_line` (1-based) in `file`. Returns the text between the
+/// opening `(` and the matching `)`, trimmed to ≤200 chars.
+///
+/// Uses a simple text-based scan of the call-site line(s) — no AST
+/// needed since we already know the callee name and line from the
+/// graph edge. Handles multi-line argument lists up to 10 lines.
+#[must_use]
+pub fn extract_call_args(file: &Path, call_site_line: u32, callee_name: &str) -> Option<String> {
+    let source = std::fs::read_to_string(file).ok()?;
+    let lines: Vec<&str> = source.lines().collect();
+    let start_row = (call_site_line.saturating_sub(1)) as usize;
+    if start_row >= lines.len() {
+        return None;
+    }
+
+    // Scan from the call-site line forward to find the opening `(` after callee_name.
+    // The call may span multiple lines (e.g. foo(\n   a,\n   b\n)).
+    // We look at up to 10 lines to find the matching parens.
+    let max_scan = (start_row + 10).min(lines.len());
+    let mut combined = String::new();
+    for line in lines.iter().take(max_scan).skip(start_row) {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(line);
+        // Once we've found the opening paren, track depth to find the close.
+        if let Some(paren_start) = combined.find('(') {
+            // Verify the callee name appears before the `(` to avoid matching
+            // a different call on the same line (e.g. bar() vs foo()).
+            let before_paren = &combined[..paren_start];
+            if !before_paren.contains(callee_name) {
+                // The `(` we found isn't for our callee — keep scanning
+                // subsequent lines. This is uncommon (sibling calls on
+                // the same line) but possible.
+                continue;
+            }
+            // Find the matching close paren starting from paren_start.
+            let after_paren = &combined[paren_start + 1..];
+            let mut depth: i32 = 1;
+            for (i, ch) in after_paren.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let args = &after_paren[..i];
+                            let trimmed = args.trim();
+                            if trimmed.is_empty() {
+                                return None;
+                            }
+                            // Cap at 200 chars to keep context lean
+                            let capped = if trimmed.len() > 200 {
+                                format!("{}...", &trimmed[..197])
+                            } else {
+                                trimmed.to_string()
+                            };
+                            return Some(capped);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Depth never reached 0 — multi-line, keep scanning
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

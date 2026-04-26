@@ -214,6 +214,23 @@ pub fn callers_of(
                 if let Some(ctx) = &mut hit.context {
                     let callee_prefix = format!("// callee: {}", target_sym.signature);
                     *ctx = format!("{callee_prefix}\n{ctx}");
+                    // Extract the callee name from the signature (e.g. "fn foo(x: i32)" -> "foo")
+                    // and look up the actual argument expressions at the call site.
+                    let callee_name = target_sym
+                        .signature
+                        .split_once(' ')
+                        .and_then(|(_prefix, rest)| rest.split_once('('))
+                        .map(|(name, _)| name.trim());
+                    if let Some(name) = callee_name {
+                        if let Some(args) = crate::search::context_extract::extract_call_args(
+                            &hit.file,
+                            call_site_line,
+                            name,
+                        ) {
+                            let args_prefix = format!("// args: {args}");
+                            *ctx = format!("{args_prefix}\n{ctx}");
+                        }
+                    }
                 }
             }
         }
