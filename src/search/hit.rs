@@ -216,6 +216,21 @@ fn compact_signature(sig: &str) -> String {
     // Pass 3 — drop the leading `fn ` keyword when present.
     let trimmed = cleaned.strip_prefix("fn ").unwrap_or(&cleaned);
 
+    // Pass 3.5 — truncate at `where` clause boundary.
+    // Rust where-clauses are verbose trait-bound boilerplate (often 20-100+
+    // chars) that carries zero orientation value for agent outline tasks.
+    // The function name, generics, and params before `where` tell the agent
+    // everything it needs.  We look for ` where` (inline) or `\nwhere` (after
+    // newline) and chop everything from there.
+    let trimmed = match trimmed.find(" where") {
+        Some(pos) => &trimmed[..pos],
+        None => trimmed,
+    };
+    let trimmed = match trimmed.find("\nwhere") {
+        Some(pos) => &trimmed[..pos],
+        None => trimmed,
+    };
+
     // Pass 4 — convert `): T` return-type style to `) -> T` when no `->`.
     if !trimmed.contains("->") {
         if let Some(idx) = trimmed.rfind("):") {
