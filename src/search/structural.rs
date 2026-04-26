@@ -12,6 +12,11 @@ use crate::search::hit::{sort_by_centrality, SearchHit};
 #[must_use]
 pub fn find(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
     let mut ids: Vec<&SymbolId> = find_by_name(graph, name);
+    if ids.is_empty() {
+        return vec![SearchHit::empty_hint(&format!(
+            "no symbol named '{name}' found; try `grep {name}` for text search"
+        ))];
+    }
     sort_by_centrality(graph, &mut ids);
     ids.into_iter()
         .take(max_hits)
@@ -845,7 +850,9 @@ mod tests {
         let mut g = CodeGraph::new();
         insert_with_centrality(&mut g, sym("process", "a.ts"), 0);
         let hits = find(&g, "xyz_no_match_anywhere", 10);
-        assert!(hits.is_empty());
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].is_hint());
+        assert!(hits[0].signature.as_deref().unwrap().contains("grep"));
     }
 
     #[test]
