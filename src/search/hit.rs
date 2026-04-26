@@ -79,15 +79,17 @@ impl SearchHit {
     #[must_use]
     pub fn without_return_type(mut self) -> Self {
         if let Some(sig) = self.signature.take() {
-            // Find the last `)` that's not part of a generics/turbofish `::>`.
-            // The return type is everything after the last `)` in the signature.
-            // We scan right-to-left to handle nested parens in params.
-            if let Some(paren) = sig.rfind(')') {
-                let after = &sig[paren + 1..];
-                // Only strip if there's actually a return type after the `)`.
+            // Find the `): ` boundary between params and return type.
+            // Using `rfind(')')` breaks for generic return types like
+            // `Result<()>` where the last `)` is inside the return type.
+            // The signature format from render_signature is `name(params): ret`,
+            // so `): ` is the unambiguous boundary.
+            if let Some(boundary) = sig.find("): ") {
+                let end = boundary + 1; // Include the `)` that closes params.
+                let after = &sig[end + 1..];
                 let trimmed = after.trim();
                 if !trimmed.is_empty() {
-                    self.signature = Some(sig[..=paren].to_string());
+                    self.signature = Some(sig[..=end].to_string());
                     return self;
                 }
             }
