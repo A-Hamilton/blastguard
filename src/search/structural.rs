@@ -607,7 +607,10 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
         .collect();
 
     // Build hits and track which are methods for the collapse pass.
-    let mut hits: Vec<SearchHit> = symbols.iter().map(|s| SearchHit::structural(s)).collect();
+    let mut hits: Vec<SearchHit> = symbols
+        .iter()
+        .map(|s| SearchHit::structural(s).without_return_type())
+        .collect();
     let mut is_method: Vec<bool> = symbols
         .iter()
         .map(|s| s.id.kind == crate::graph::types::SymbolKind::Method)
@@ -1042,7 +1045,11 @@ mod tests {
         g.insert_symbol(pub_sym);
         g.insert_symbol(priv_sym);
         let hits = outline_of(&g, std::path::Path::new("x.rs"));
-        assert_eq!(hits.len(), 2, "all symbols regardless of visibility should be included");
+        assert_eq!(
+            hits.len(),
+            2,
+            "all symbols regardless of visibility should be included"
+        );
         assert!(hits[0]
             .signature
             .as_deref()
