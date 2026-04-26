@@ -76,9 +76,18 @@ async fn search_response_hits_are_compact_and_path_relative() {
         .expect("search_tool should return a successful Json response");
 
     let hits = &resp.0.hits;
-    assert_eq!(hits.len(), 1, "expected exactly one hit, got {hits:?}");
+    assert_eq!(
+        hits.len(),
+        2,
+        "expected summary header + 1 hit, got {hits:?}"
+    );
+    assert!(
+        hits[0].contains("entries"),
+        "first hit should be the summary header, got: {}",
+        hits[0]
+    );
 
-    let line = &hits[0];
+    let line = &hits[1];
 
     // Path must be relative (no project_root prefix leaked).
     let root_str = project_root.display().to_string();

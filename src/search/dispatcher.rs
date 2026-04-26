@@ -165,12 +165,9 @@ mod tests {
             embedding_id: None,
         });
         let hits = dispatch(&g, &project_root, "outline of src/foo.rs");
-        assert_eq!(
-            hits.len(),
-            1,
-            "relative path should resolve against project_root"
-        );
-        assert_eq!(hits[0].signature.as_deref(), Some("fn do_thing()"));
+        assert_eq!(hits.len(), 2, "summary header + 1 function");
+        assert!(hits[0].is_hint(), "first hit is the summary header");
+        assert_eq!(hits[1].signature.as_deref(), Some("fn do_thing()"));
     }
 
     #[test]
@@ -196,7 +193,7 @@ mod tests {
         });
         let q = format!("outline of {}", abs_file.display());
         let hits = dispatch(&g, &project_root, &q);
-        assert_eq!(hits.len(), 1);
+        assert_eq!(hits.len(), 2, "summary header + 1 function");
     }
 
     #[test]
