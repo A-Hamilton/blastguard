@@ -3,19 +3,52 @@
 //! Each public function resolves a [`super::query::QueryKind`] arm against the
 //! [`CodeGraph`] and renders hits via [`super::hit::SearchHit::structural`].
 
+use std::fmt::Write;
+use std::path::Path;
+
 use crate::graph::ops::{callees, callers, find_by_name, shortest_path};
 use crate::graph::types::{CodeGraph, Confidence, EdgeKind, Symbol, SymbolId};
 use crate::search::hit::{sort_by_centrality, SearchHit};
 
 /// `find X` / `where is X` — centrality-ranked name lookup with fuzzy fallback.
 /// Returns at most `max_hits` results.
+///
+/// When no symbol matches are found, runs a bounded grep (max 3 hits, 80-char
+/// snippets) and includes the results inline in the empty-hint message — saving
+/// the agent an extra `grep` round-trip.
 #[must_use]
-pub fn find(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
+pub fn find(graph: &CodeGraph, name: &str, max_hits: usize, project_root: &Path) -> Vec<SearchHit> {
     let mut ids: Vec<&SymbolId> = find_by_name(graph, name);
     if ids.is_empty() {
-        return vec![SearchHit::empty_hint(&format!(
-            "no symbol named '{name}' found; try `grep {name}` for text search"
-        ))];
+        let grep_hits = super::text::grep(project_root, name);
+        // Take up to 3 real hits (skip the count header at index 0).
+        let snippet_count = grep_hits.len().saturating_sub(1).min(3);
+        let mut msg = format!(
+            "no symbol named '{name}' found; grep found {snippet_count} match{}:",
+            if snippet_count == 1 { "" } else { "es" },
+        );
+        for hit in grep_hits.iter().skip(1).take(3) {
+            let path = hit.file.strip_prefix(project_root).map_or_else(
+                |_| hit.file.display().to_string(),
+                |p| p.display().to_string(),
+            );
+            let snippet = hit
+                .snippet
+                .as_deref()
+                .unwrap_or("")
+                .chars()
+                .take(80)
+                .collect::<String>();
+            let _ = write!(msg, "\n  {}:{} {}", path, hit.line, snippet);
+        }
+        if grep_hits.len() > 4 {
+            let _ = write!(
+                msg,
+                "\n  ... and {} more matches — use `grep {name}` for full results",
+                grep_hits.len() - 4
+            );
+        }
+        return vec![SearchHit::empty_hint(&msg)];
     }
     sort_by_centrality(graph, &mut ids);
     let mut hits: Vec<SearchHit> = ids
@@ -991,7 +1024,7 @@ mod tests {
         let mut g = CodeGraph::new();
         insert_with_centrality(&mut g, sym("process", "a.ts"), 5);
 
-        let hits = find(&g, "process", 10);
+        let hits = find(&g, "process", 10, Path::new("."));
         assert_eq!(hits.len(), 2, "count header + 1 match");
         assert!(hits[0].is_hint());
         assert!(hits[0].signature.as_deref().unwrap().contains("1 symbol"));
@@ -1006,7 +1039,7 @@ mod tests {
         let mut g = CodeGraph::new();
         insert_with_centrality(&mut g, sym("procss", "b.ts"), 1);
 
-        let hits = find(&g, "process", 10);
+        let hits = find(&g, "process", 10, Path::new("."));
         assert_eq!(hits.len(), 2, "count header + 1 match");
         assert!(hits[0].is_hint());
         assert!(hits[0].signature.as_deref().unwrap().contains("1 symbol"));
@@ -1019,7 +1052,7 @@ mod tests {
         insert_with_centrality(&mut g, sym("process", "low.ts"), 1);
         insert_with_centrality(&mut g, sym("process", "high.ts"), 100);
 
-        let hits = find(&g, "process", 10);
+        let hits = find(&g, "process", 10, Path::new("."));
         assert_eq!(hits.len(), 3, "count header + 2 matches");
         assert!(hits[0].is_hint());
         assert!(hits[0].signature.as_deref().unwrap().contains("2 symbols"));
@@ -1033,7 +1066,7 @@ mod tests {
         for i in 0..20 {
             insert_with_centrality(&mut g, sym("dup", &format!("f{i}.ts")), i);
         }
-        let hits = find(&g, "dup", 5);
+        let hits = find(&g, "dup", 5, Path::new("."));
         assert_eq!(hits.len(), 6, "count header + 5 hits");
     }
 
@@ -1041,7 +1074,8 @@ mod tests {
     fn find_empty_when_no_match_at_all() {
         let mut g = CodeGraph::new();
         insert_with_centrality(&mut g, sym("process", "a.ts"), 0);
-        let hits = find(&g, "xyz_no_match_anywhere", 10);
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let hits = find(&g, "xyz_no_match_anywhere", 10, tmp.path());
         assert_eq!(hits.len(), 1);
         assert!(hits[0].is_hint());
         assert!(hits[0].signature.as_deref().unwrap().contains("grep"));
@@ -1598,7 +1632,7 @@ mod tests {
         }
 
         // `find hi` returns the high-centrality hit first (header + 1 match).
-        let find_hits = find(&g, "hi", 10);
+        let find_hits = find(&g, "hi", 10, Path::new("."));
         assert_eq!(find_hits.len(), 2, "count header + 1 match");
         assert!(find_hits[0].is_hint());
         assert_eq!(find_hits[1].file, PathBuf::from("hi.ts"));

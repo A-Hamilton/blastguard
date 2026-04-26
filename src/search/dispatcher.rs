@@ -38,7 +38,7 @@ fn resolve_query_path(project_root: &Path, path: &Path) -> PathBuf {
 #[must_use]
 pub fn dispatch(graph: &CodeGraph, project_root: &Path, query: &str) -> Vec<SearchHit> {
     match classify(query) {
-        QueryKind::Find(name) => structural::find(graph, &name, FIND_MAX_HITS),
+        QueryKind::Find(name) => structural::find(graph, &name, FIND_MAX_HITS, project_root),
         QueryKind::Callers(name, with_context) => {
             structural::callers_of(graph, &name, CALLERS_MAX_HITS, project_root, with_context)
         }
