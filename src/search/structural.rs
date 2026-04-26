@@ -212,7 +212,13 @@ pub fn callers_of(
             // what arguments to pass in apply_edit.
             if let Some(target_sym) = graph.symbols.get(target_id) {
                 if let Some(ctx) = &mut hit.context {
-                    let callee_prefix = format!("// callee: {}", target_sym.signature);
+                    // Strip return type from callee prefix — agents only need
+                    // param types to craft arguments; return type is noise.
+                    let callee_sig = target_sym.signature.as_str();
+                    let callee_sig = callee_sig
+                        .find("): ")
+                        .map_or(callee_sig, |boundary| &callee_sig[..=boundary]);
+                    let callee_prefix = format!("// callee: {callee_sig}");
                     *ctx = format!("{callee_prefix}\n{ctx}");
                     // Extract the callee name from the signature (e.g. "fn foo(x: i32)" -> "foo")
                     // and look up the actual argument expressions at the call site.
