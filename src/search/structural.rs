@@ -116,6 +116,16 @@ pub fn callers_of(
                 .unwrap_or(hit.line); // fallback: caller def line
             hit.context =
                 crate::search::context_extract::enclosing_statement(&hit.file, call_site_line);
+            // Prepend the callee's compact signature as a comment prefix so
+            // the agent sees parameter types inline with each caller hit,
+            // eliminating the need for a separate `find` call to understand
+            // what arguments to pass in apply_edit.
+            if let Some(target_sym) = graph.symbols.get(target_id) {
+                if let Some(ctx) = &mut hit.context {
+                    let callee_prefix = format!("// callee: {}", target_sym.signature);
+                    *ctx = format!("{callee_prefix}\n{ctx}");
+                }
+            }
         }
     }
 
