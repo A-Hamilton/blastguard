@@ -71,6 +71,31 @@ impl SearchHit {
         self.file.as_os_str().is_empty() && self.line == 0 && self.snippet.is_none()
     }
 
+    /// Strip the return type from the signature, keeping only `name(params)`.
+    /// The return type is the least-used part of a signature for agent
+    /// orientation — agents outline to discover function existence and
+    /// parameter shapes, then drill into specific functions via `find`
+    /// or `callers of with context`.
+    #[must_use]
+    pub fn without_return_type(mut self) -> Self {
+        if let Some(sig) = self.signature.take() {
+            // Find the last `)` that's not part of a generics/turbofish `::>`.
+            // The return type is everything after the last `)` in the signature.
+            // We scan right-to-left to handle nested parens in params.
+            if let Some(paren) = sig.rfind(')') {
+                let after = &sig[paren + 1..];
+                // Only strip if there's actually a return type after the `)`.
+                let trimmed = after.trim();
+                if !trimmed.is_empty() {
+                    self.signature = Some(sig[..=paren].to_string());
+                    return self;
+                }
+            }
+            self.signature = Some(sig);
+        }
+        self
+    }
+
     /// Render the hit as a single compact line suitable for an MCP tool
     /// response. Uses `project_root`-relative paths when possible, and
     /// strips lifetime/generic-bound syntax from the signature — agents
