@@ -212,8 +212,8 @@ mod tests {
 
         let g = CodeGraph::new();
         let hits = dispatch(&g, tmp.path(), "NEEDLE");
-        assert!(!hits.is_empty());
-        assert!(hits[0].snippet.as_deref().unwrap().contains("NEEDLE"));
+        assert!(hits.len() > 1, "expected header + at least 1 hit");
+        assert!(hits[1].snippet.as_deref().unwrap().contains("NEEDLE"));
     }
 
     #[test]
