@@ -116,11 +116,29 @@ impl SearchHit {
 }
 
 /// Strip Rust-specific noise from a signature line that agents don't need for
-/// orientation: explicit lifetimes (`'a`, `'g`, `'static`), trait bounds inside
-/// generics (`T: Sized`), and the leading `fn ` keyword. Converts the
-/// Rust-idiomatic `): Ret` return-type colon to `) -> Ret` only when the
-/// original had no `->`.
+/// orientation: doc comments (`///`, `//!`), explicit lifetimes (`'a`, `'g`,
+/// `'static`), trait bounds inside generics (`T: Sized`), and the leading
+/// `fn ` keyword. Converts the Rust-idiomatic `): Ret` return-type colon to
+/// `) -> Ret` only when the original had no `->`.
 fn compact_signature(sig: &str) -> String {
+    // Pass 0 — strip Rust doc-comment lines (`/// ...` and `//! ...`).
+    // These carry zero semantic value for agent orientation and inflate
+    // output tokens on doc-heavy files. Handles both outer (`///`) and
+    // inner (`//!`) doc comments, including `///[` doc-link syntax.
+    let sig = {
+        let mut stripped = String::with_capacity(sig.len());
+        for line in sig.lines() {
+            let trimmed = line.trim_start();
+            if !(trimmed.starts_with("///") || trimmed.starts_with("//!")) {
+                if !stripped.is_empty() {
+                    stripped.push('\n');
+                }
+                stripped.push_str(line);
+            }
+        }
+        stripped
+    };
+
     // Pass 1 — strip lifetimes: scan byte-by-byte, track angle-bracket depth.
     // Inside `<...>`, any `'ident` (followed by opt `, `) is dropped.
     // Outside `<...>`, `'ident` is also dropped (e.g. `&'a T` → `&T`).
