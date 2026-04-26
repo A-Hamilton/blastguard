@@ -107,7 +107,7 @@ pub fn callers_of_id(graph: &CodeGraph, id: &SymbolId, max_hits: usize) -> Vec<S
         .into_iter()
         .take(max_hits)
         .filter_map(|cid| graph.symbols.get(cid))
-        .map(SearchHit::structural)
+        .map(|s| SearchHit::structural(s).without_return_type())
         .collect();
 
     // Prepend a count header for completeness confidence.
@@ -171,7 +171,7 @@ pub fn callers_of(
         .into_iter()
         .take(max_hits)
         .filter_map(|id| graph.symbols.get(id))
-        .map(SearchHit::structural)
+        .map(|s| SearchHit::structural(s).without_return_type())
         .collect();
 
     if with_context {
