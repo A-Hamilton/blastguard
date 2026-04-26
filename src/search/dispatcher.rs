@@ -119,8 +119,10 @@ mod tests {
         let mut g = CodeGraph::new();
         g.insert_symbol(sym("processRequest"));
         let hits = dispatch(&g, Path::new("."), "find processRequest");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].signature.as_deref(), Some("fn processRequest()"));
+        assert_eq!(hits.len(), 2, "count header + 1 match");
+        assert!(hits[0].is_hint());
+        assert!(hits[0].signature.as_deref().unwrap().contains("1 symbol"));
+        assert_eq!(hits[1].signature.as_deref(), Some("fn processRequest()"));
     }
 
     #[test]
@@ -262,6 +264,6 @@ mod tests {
             });
         }
         let hits = dispatch(&g, Path::new("/p"), "find mytest");
-        assert!(hits.len() <= 5, "find should cap at 5, got {}", hits.len());
+        assert_eq!(hits.len(), 6, "count header + 5 capped matches");
     }
 }
