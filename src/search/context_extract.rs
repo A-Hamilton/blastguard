@@ -168,6 +168,13 @@ const RUST_STATEMENT_KINDS: &[&str] = &[
     "return_expression",
     "macro_invocation",
     "assignment_expression",
+    "if_expression",
+    "for_expression",
+    "match_expression",
+    "while_expression",
+    "loop_expression",
+    "unsafe_block",
+    "try_block",
 ];
 
 // ── Python ────────────────────────────────────────────────────────────
