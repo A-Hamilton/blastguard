@@ -3,7 +3,6 @@
 //! Each public function resolves a [`super::query::QueryKind`] arm against the
 //! [`CodeGraph`] and renders hits via [`super::hit::SearchHit::structural`].
 
-use std::fmt::Write;
 use std::path::Path;
 
 use crate::graph::ops::{callees, callers, find_by_name, shortest_path};
@@ -20,35 +19,14 @@ use crate::search::hit::{sort_by_centrality, SearchHit};
 pub fn find(graph: &CodeGraph, name: &str, max_hits: usize, project_root: &Path) -> Vec<SearchHit> {
     let mut ids: Vec<&SymbolId> = find_by_name(graph, name);
     if ids.is_empty() {
-        let grep_hits = super::text::grep(project_root, name);
-        // Take up to 3 real hits (skip the count header at index 0).
-        let snippet_count = grep_hits.len().saturating_sub(1).min(3);
-        let mut msg = format!(
-            "no symbol named '{name}' found; grep found {snippet_count} match{}:",
-            if snippet_count == 1 { "" } else { "es" },
-        );
-        for hit in grep_hits.iter().skip(1).take(3) {
-            let path = hit.file.strip_prefix(project_root).map_or_else(
-                |_| hit.file.display().to_string(),
-                |p| p.display().to_string(),
-            );
-            let snippet = hit
-                .snippet
-                .as_deref()
-                .unwrap_or("")
-                .chars()
-                .take(80)
-                .collect::<String>();
-            let _ = write!(msg, "\n  {}:{} {}", path, hit.line, snippet);
+        let mut grep_hits = super::text::grep(project_root, name);
+        // Return grep hits directly (up to max_hits actual results, plus
+        // the count header at index 0) instead of embedding 3 snippets in
+        // a hint message. This saves the agent a follow-up grep call.
+        if grep_hits.len() > max_hits + 1 {
+            grep_hits.truncate(max_hits + 1);
         }
-        if grep_hits.len() > 4 {
-            let _ = write!(
-                msg,
-                "\n  ... and {} more matches — use `grep {name}` for full results",
-                grep_hits.len() - 4
-            );
-        }
-        return vec![SearchHit::empty_hint(&msg)];
+        return grep_hits;
     }
     sort_by_centrality(graph, &mut ids);
     let mut hits: Vec<SearchHit> = ids
@@ -1078,7 +1056,7 @@ mod tests {
         let hits = find(&g, "xyz_no_match_anywhere", 10, tmp.path());
         assert_eq!(hits.len(), 1);
         assert!(hits[0].is_hint());
-        assert!(hits[0].signature.as_deref().unwrap().contains("grep"));
+        assert!(hits[0].signature.as_deref().unwrap().contains("0 hits"));
     }
 
     #[test]
