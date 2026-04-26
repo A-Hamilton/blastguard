@@ -585,6 +585,12 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
     let mut hits: Vec<SearchHit> = symbol_ids
         .iter()
         .filter_map(|id| graph.symbols.get(id))
+        .filter(|s| {
+            matches!(
+                s.visibility,
+                crate::graph::types::Visibility::Export | crate::graph::types::Visibility::Public
+            )
+        })
         .map(SearchHit::structural)
         .collect();
     hits.sort_by_key(|h| h.line);
@@ -922,6 +928,24 @@ mod tests {
         let g = CodeGraph::new();
         let hits = outline_of(&g, std::path::Path::new("nope.ts"));
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn outline_of_filters_private_symbols() {
+        let mut g = CodeGraph::new();
+        let mut pub_sym = sym("public_fn", "x.rs");
+        pub_sym.visibility = Visibility::Export;
+        let mut priv_sym = sym_at("private_fn", "x.rs", 20);
+        priv_sym.visibility = Visibility::Private;
+        g.insert_symbol(pub_sym);
+        g.insert_symbol(priv_sym);
+        let hits = outline_of(&g, std::path::Path::new("x.rs"));
+        assert_eq!(hits.len(), 1, "private symbols should be filtered out");
+        assert!(hits[0]
+            .signature
+            .as_deref()
+            .unwrap_or("")
+            .contains("public_fn"));
     }
 
     #[test]
