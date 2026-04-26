@@ -712,7 +712,42 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
             i += 1;
         }
     }
-    collapsed
+
+    // Build a summary header showing total function count and category breakdown.
+    // Gives the agent immediate confidence the outline is complete, reducing
+    // distrust-driven read_file fallback (saves ~2k tokens on high-variance seeds).
+    let mut regular = 0u32;
+    let mut methods = 0u32;
+    let mut tests = 0u32;
+    for h in &collapsed {
+        let Some(sig) = h.signature.as_deref() else {
+            regular += 1;
+            continue;
+        };
+        if sig.starts_with("impl { (") {
+            methods += 1;
+        } else if sig.starts_with("[test]") {
+            tests += 1;
+        } else {
+            regular += 1;
+        }
+    }
+    let total = regular + methods + tests;
+    let mut parts: Vec<String> = Vec::new();
+    if regular > 0 {
+        parts.push(format!("{regular} functions"));
+    }
+    if methods > 0 {
+        parts.push(format!("{methods} method groups"));
+    }
+    if tests > 0 {
+        parts.push(format!("{tests} test groups"));
+    }
+    let summary = format!("{total} entries ({})", parts.join(", "));
+    let mut result = Vec::with_capacity(collapsed.len() + 1);
+    result.push(SearchHit::empty_hint(&summary));
+    result.extend(collapsed);
+    result
 }
 
 /// Extract the bare function name from a signature string for dedup purposes.
@@ -1022,10 +1057,13 @@ mod tests {
             g.insert_symbol(s);
         }
         let hits = outline_of(&g, std::path::Path::new("x.ts"));
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].line, 5);
-        assert_eq!(hits[1].line, 10);
-        assert!(hits.iter().all(|h| h.file == std::path::Path::new("x.ts")));
+        assert_eq!(hits.len(), 3, "summary header + 2 symbols");
+        assert!(hits[0].is_hint(), "first hit is the summary header");
+        assert_eq!(hits[1].line, 5);
+        assert_eq!(hits[2].line, 10);
+        assert!(hits[1..]
+            .iter()
+            .all(|h| h.file == std::path::Path::new("x.ts")));
     }
 
     #[test]
@@ -1047,15 +1085,16 @@ mod tests {
         let hits = outline_of(&g, std::path::Path::new("x.rs"));
         assert_eq!(
             hits.len(),
-            2,
-            "all symbols regardless of visibility should be included"
+            3,
+            "summary header + all symbols regardless of visibility should be included"
         );
-        assert!(hits[0]
+        assert!(hits[0].is_hint(), "first hit is the summary header");
+        assert!(hits[1]
             .signature
             .as_deref()
             .unwrap_or("")
             .contains("public_fn"));
-        assert!(hits[1]
+        assert!(hits[2]
             .signature
             .as_deref()
             .unwrap_or("")
@@ -1200,7 +1239,8 @@ mod tests {
         test_sym.id.kind = SymbolKind::Method;
         g.insert_symbol(test_sym);
         let hits = outline_of(&g, &file);
-        assert_eq!(hits.len(), 2);
+        assert_eq!(hits.len(), 3, "summary header + 2 symbols");
+        assert!(hits[0].is_hint(), "first hit is the summary header");
         // The later one should be tagged.
         let tagged = hits.iter().find(|h| h.line == 100).expect("hit at 100");
         assert!(
