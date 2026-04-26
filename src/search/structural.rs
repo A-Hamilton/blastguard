@@ -578,6 +578,7 @@ pub fn exports_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
 /// `#[cfg(test)] fn foo` emit both; the later one is almost always the
 /// test copy, so we tag it so agents can filter at a glance.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
     let Some(symbol_ids) = graph.file_symbols.get(file) else {
         return Vec::new();
@@ -589,6 +590,14 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
             matches!(
                 s.visibility,
                 crate::graph::types::Visibility::Export | crate::graph::types::Visibility::Public
+            )
+        })
+        .filter(|s| {
+            matches!(
+                s.id.kind,
+                crate::graph::types::SymbolKind::Function
+                    | crate::graph::types::SymbolKind::AsyncFunction
+                    | crate::graph::types::SymbolKind::Method
             )
         })
         .collect();
