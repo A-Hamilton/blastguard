@@ -129,7 +129,12 @@ fn line_window_fallback(source: &str, line: u32, radius: u32) -> String {
 // thread-local Parser (Parser is not Send-safe, matching
 // src/parse/rust.rs's pattern).
 
-fn extract_via_ast(source: &str, tree: &tree_sitter::Tree, line: u32, lang: Language) -> Option<String> {
+fn extract_via_ast(
+    source: &str,
+    tree: &tree_sitter::Tree,
+    line: u32,
+    lang: Language,
+) -> Option<String> {
     match lang {
         Language::Rust => extract_rust(source, tree, line),
         Language::Python => extract_python(source, tree, line),
