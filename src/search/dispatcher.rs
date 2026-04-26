@@ -141,7 +141,8 @@ mod tests {
             confidence: Confidence::Certain,
         });
         let hits = dispatch(&g, Path::new("."), "callers of target");
-        assert_eq!(hits.len(), 1);
+        // 1 count header + 1 caller = 2
+        assert_eq!(hits.len(), 2);
     }
 
     #[test]

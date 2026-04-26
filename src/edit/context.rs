@@ -24,7 +24,7 @@ pub fn build(
 
     'outer: for sym in changed {
         let hits = callers_of_id(graph, &sym.id, per_symbol_cap);
-        for hit in hits {
+        for hit in hits.iter().filter(|h| !h.is_hint()) {
             let rel = hit.file.strip_prefix(project_root).unwrap_or(&hit.file);
             let line_str = match hit.signature.as_deref() {
                 Some(sig) => format!("{}:{} — {}", rel.display(), hit.line, sig),
