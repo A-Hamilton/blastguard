@@ -762,11 +762,12 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
     let hits = collapsed;
 
     // Collapse consecutive private-helper entries (non-method functions with
-    // Visibility::Private) into a single `[helpers] (N functions)` summary
-    // entry. Private helper functions carry minimal orientation value in an
-    // outline — agents outline to find the public API surface, then use `find`
-    // for specific helpers. Same proven mechanism as method collapse and
-    // test-function collapse.
+    // Visibility::Private) into a single `[helpers] name1, name2, ...` summary
+    // entry. Unlike method/test collapse, private helpers are often what the
+    // agent needs to enumerate by category — hiding them behind a bare count
+    // causes the agent to fall back to expensive bash+grep calls to discover
+    // the names. Showing names directly (~150 chars for 28 helpers) eliminates
+    // that distrust-driven fallback.
     let mut collapsed: Vec<SearchHit> = Vec::with_capacity(hits.len());
     let mut i = 0;
     while i < hits.len() {
@@ -780,8 +781,12 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
             }
             if count >= 2 {
                 let first = &hits[group_start];
+                let names: Vec<String> = hits[group_start..group_start + count]
+                    .iter()
+                    .filter_map(|h| h.signature.as_deref().map(extract_fn_name))
+                    .collect();
                 collapsed.push(SearchHit {
-                    signature: Some(format!("[helpers] ({count} functions)")),
+                    signature: Some(format!("[helpers] {}", names.join(", "))),
                     ..first.clone()
                 });
             } else {
