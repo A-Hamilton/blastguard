@@ -662,7 +662,8 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
         })
         .collect();
 
-    // Build hits and track which are methods for the collapse pass.
+    // Build hits and track which are methods and which are private helpers
+    // for the collapse passes below.
     let mut hits: Vec<SearchHit> = symbols
         .iter()
         .map(|s| SearchHit::structural(s).without_return_type())
@@ -671,12 +672,20 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
         .iter()
         .map(|s| s.id.kind == crate::graph::types::SymbolKind::Method)
         .collect();
-    // Sort both in parallel by line.
+    let mut is_private_fn: Vec<bool> = symbols
+        .iter()
+        .map(|s| {
+            s.id.kind != crate::graph::types::SymbolKind::Method
+                && s.visibility == crate::graph::types::Visibility::Private
+        })
+        .collect();
+    // Sort all three in parallel by line.
     {
         let mut indices: Vec<usize> = (0..hits.len()).collect();
         indices.sort_by_key(|&i| hits[i].line);
         hits = indices.iter().map(|&i| hits[i].clone()).collect();
         is_method = indices.iter().map(|&i| is_method[i]).collect();
+        is_private_fn = indices.iter().map(|&i| is_private_fn[i]).collect();
     }
 
     // Tag duplicate-name entries after the first occurrence as `[test]`.
@@ -713,6 +722,39 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
                 let first = &hits[group_start];
                 collapsed.push(SearchHit {
                     signature: Some(format!("impl {{ ({count} methods) }}")),
+                    ..first.clone()
+                });
+            } else {
+                collapsed.push(hits[group_start].clone());
+            }
+        } else {
+            collapsed.push(hits[i].clone());
+            i += 1;
+        }
+    }
+    let hits = collapsed;
+
+    // Collapse consecutive private-helper entries (non-method functions with
+    // Visibility::Private) into a single `[helpers] (N functions)` summary
+    // entry. Private helper functions carry minimal orientation value in an
+    // outline — agents outline to find the public API surface, then use `find`
+    // for specific helpers. Same proven mechanism as method collapse and
+    // test-function collapse.
+    let mut collapsed: Vec<SearchHit> = Vec::with_capacity(hits.len());
+    let mut i = 0;
+    while i < hits.len() {
+        if is_private_fn[i] {
+            let group_start = i;
+            let mut count = 1;
+            i += 1;
+            while i < hits.len() && is_private_fn[i] {
+                count += 1;
+                i += 1;
+            }
+            if count >= 2 {
+                let first = &hits[group_start];
+                collapsed.push(SearchHit {
+                    signature: Some(format!("[helpers] ({count} functions)")),
                     ..first.clone()
                 });
             } else {
@@ -775,6 +817,7 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
     let mut regular = 0u32;
     let mut methods = 0u32;
     let mut tests = 0u32;
+    let mut helpers = 0u32;
     for h in &collapsed {
         let Some(sig) = h.signature.as_deref() else {
             regular += 1;
@@ -784,11 +827,13 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
             methods += 1;
         } else if sig.starts_with("[test]") {
             tests += 1;
+        } else if sig.starts_with("[helpers]") {
+            helpers += 1;
         } else {
             regular += 1;
         }
     }
-    let total = regular + methods + tests;
+    let total = regular + methods + tests + helpers;
     let mut parts: Vec<String> = Vec::new();
     if regular > 0 {
         parts.push(format!("{regular} functions"));
@@ -798,6 +843,9 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
     }
     if tests > 0 {
         parts.push(format!("{tests} test groups"));
+    }
+    if helpers > 0 {
+        parts.push(format!("{helpers} helper groups"));
     }
     let summary = format!("{total} entries ({})", parts.join(", "));
     let mut result = Vec::with_capacity(collapsed.len() + 1);
