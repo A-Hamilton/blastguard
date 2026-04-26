@@ -60,11 +60,8 @@ pub fn grep(project_root: &Path, pattern: &str) -> Vec<SearchHit> {
             };
             if re.is_match(&line) {
                 let lineno = u32::try_from(idx).unwrap_or(u32::MAX).saturating_add(1);
-                hits.push(SearchHit::grep(
-                    entry.path().to_path_buf(),
-                    lineno,
-                    line.trim_end().to_string(),
-                ));
+                let snippet: String = line.trim_end().chars().take(120).collect();
+                hits.push(SearchHit::grep(entry.path().to_path_buf(), lineno, snippet));
             }
         }
     }
