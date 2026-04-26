@@ -598,12 +598,6 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
         .filter_map(|id| graph.symbols.get(id))
         .filter(|s| {
             matches!(
-                s.visibility,
-                crate::graph::types::Visibility::Export | crate::graph::types::Visibility::Public
-            )
-        })
-        .filter(|s| {
-            matches!(
                 s.id.kind,
                 crate::graph::types::SymbolKind::Function
                     | crate::graph::types::SymbolKind::AsyncFunction
@@ -1039,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn outline_of_filters_private_symbols() {
+    fn outline_of_includes_all_visibility_symbols() {
         let mut g = CodeGraph::new();
         let mut pub_sym = sym("public_fn", "x.rs");
         pub_sym.visibility = Visibility::Export;
@@ -1048,12 +1042,17 @@ mod tests {
         g.insert_symbol(pub_sym);
         g.insert_symbol(priv_sym);
         let hits = outline_of(&g, std::path::Path::new("x.rs"));
-        assert_eq!(hits.len(), 1, "private symbols should be filtered out");
+        assert_eq!(hits.len(), 2, "all symbols regardless of visibility should be included");
         assert!(hits[0]
             .signature
             .as_deref()
             .unwrap_or("")
             .contains("public_fn"));
+        assert!(hits[1]
+            .signature
+            .as_deref()
+            .unwrap_or("")
+            .contains("private_fn"));
     }
 
     #[test]
