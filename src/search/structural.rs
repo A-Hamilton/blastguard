@@ -44,12 +44,37 @@ pub fn callers_of_id(graph: &CodeGraph, id: &SymbolId, max_hits: usize) -> Vec<S
             .collect();
     }
     sort_by_centrality(graph, &mut caller_ids);
-    caller_ids
+    let mut hits: Vec<SearchHit> = caller_ids
         .into_iter()
         .take(max_hits)
         .filter_map(|cid| graph.symbols.get(cid))
         .map(SearchHit::structural)
-        .collect()
+        .collect();
+
+    // Prepend a count header for completeness confidence.
+    let caller_count = hits.len();
+    let file_count = {
+        let mut files: std::collections::BTreeSet<&std::path::Path> =
+            std::collections::BTreeSet::new();
+        for h in &hits {
+            if !h.file.as_os_str().is_empty() {
+                files.insert(h.file.as_path());
+            }
+        }
+        files.len()
+    };
+    let count_hint = if caller_count > 0 {
+        format!(
+            "=== {caller_count} caller{} of {} in {file_count} file{} ===",
+            if caller_count == 1 { "" } else { "s" },
+            id.name,
+            if file_count == 1 { "" } else { "s" },
+        )
+    } else {
+        format!("=== 0 callers of {} ===", id.name)
+    };
+    hits.insert(0, SearchHit::empty_hint(&count_hint));
+    hits
 }
 
 /// `callers of X` / `what calls X` — reverse BFS (1 hop) with inline signatures.
@@ -61,6 +86,7 @@ pub fn callers_of_id(graph: &CodeGraph, id: &SymbolId, max_hits: usize) -> Vec<S
 /// `project_root` is only used to render the cross-file importer hint's
 /// embedded target path as relative — pass the indexed project root.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn callers_of(
     graph: &CodeGraph,
     name: &str,
@@ -176,6 +202,31 @@ pub fn callers_of(
             "no same-file callers and no cross-file importers in Phase 1 graph; use grep",
         )];
     }
+
+    // Prepend a count header so the agent has immediate completeness
+    // confidence, reducing distrust-driven re-queries (analogous to the
+    // outline summary header which saved -55.2% on outline-tree-sitter-rust).
+    let caller_count = hits.iter().filter(|h| !h.is_hint()).count();
+    let file_count = {
+        let mut files: std::collections::BTreeSet<&std::path::Path> =
+            std::collections::BTreeSet::new();
+        for h in &hits {
+            if !h.is_hint() && !h.file.as_os_str().is_empty() {
+                files.insert(h.file.as_path());
+            }
+        }
+        files.len()
+    };
+    let count_hint = if caller_count > 0 {
+        format!(
+            "=== {caller_count} caller{} of {name} in {file_count} file{} ===",
+            if caller_count == 1 { "" } else { "s" },
+            if file_count == 1 { "" } else { "s" },
+        )
+    } else {
+        format!("=== 0 callers of {name} (only cross-file importers) ===")
+    };
+    hits.insert(0, SearchHit::empty_hint(&count_hint));
     hits
 }
 
@@ -921,21 +972,20 @@ mod tests {
         });
 
         let hits = callers_of(&g, "login", 10, std::path::Path::new("."), false);
-        // Exactly one hit: the function-level caller. The redundant
-        // importer hint for handler.ts must be suppressed.
+        // Hit 0 is the count header, hit 1 is the function-level caller.
         assert_eq!(
             hits.len(),
-            1,
-            "expected 1 hit (function caller only, no duplicate importer hint); got {hits:?}"
+            2,
+            "expected 2 hits (header + function caller, no duplicate importer hint); got {hits:?}"
         );
-        assert_eq!(hits[0].file, PathBuf::from("handler.ts"));
+        assert_eq!(hits[1].file, PathBuf::from("handler.ts"));
         assert!(
-            !hits[0]
+            !hits[1]
                 .signature
                 .as_deref()
                 .is_some_and(|s| s.contains("cross-file importer")),
-            "first hit must be the function caller, not the importer hint: {:?}",
-            hits[0].signature
+            "hit 1 must be the function caller, not the importer hint: {:?}",
+            hits[1].signature
         );
     }
 
@@ -971,7 +1021,8 @@ mod tests {
         }
 
         let hits = callers_of(&g, "target", 5, std::path::Path::new("."), false);
-        assert_eq!(hits.len(), 5);
+        // 1 count header + 5 caller hits = 6
+        assert_eq!(hits.len(), 6);
     }
 
     #[test]
@@ -1357,17 +1408,20 @@ mod tests {
         }
 
         let hits = callers_of(&g, "foo", 10, std::path::Path::new("."), false);
-        // No intra-file callers; the two importers should surface as hints.
+        // Hit 0 is the count header, hits 1-2 are the importer hints.
         assert_eq!(
             hits.len(),
-            2,
-            "expected two cross-file importer hints, got {:?}",
+            3,
+            "expected 3 hits (header + two cross-file importer hints), got {:?}",
             hits.iter().map(|h| &h.file).collect::<Vec<_>>()
         );
-        let importer_files: std::collections::HashSet<_> = hits.iter().map(|h| &h.file).collect();
+        // Skip the header (index 0), check the importer hints at 1-2.
+        let importer_hits: Vec<&SearchHit> = hits.iter().skip(1).collect();
+        let importer_files: std::collections::HashSet<_> =
+            importer_hits.iter().map(|h| &h.file).collect();
         assert!(importer_files.contains(&importer_a));
         assert!(importer_files.contains(&importer_b));
-        for hit in &hits {
+        for hit in &importer_hits {
             let sig = hit.signature.as_deref().unwrap_or("");
             assert!(
                 sig.contains("cross-file importer"),
@@ -1408,9 +1462,11 @@ mod tests {
         assert_eq!(find_hits[0].file, PathBuf::from("hi.ts"));
 
         // `callers of target` orders hi before lo because hi has centrality 100.
+        // Hit 0 is the count header, hits 1-2 are the callers.
         let caller_hits = callers_of(&g, "target", 10, std::path::Path::new("."), false);
-        assert_eq!(caller_hits[0].file, PathBuf::from("hi.ts"));
-        assert_eq!(caller_hits[1].file, PathBuf::from("lo.ts"));
+        assert_eq!(caller_hits.len(), 3, "header + 2 callers");
+        assert_eq!(caller_hits[1].file, PathBuf::from("hi.ts"));
+        assert_eq!(caller_hits[2].file, PathBuf::from("lo.ts"));
     }
 
     #[test]
