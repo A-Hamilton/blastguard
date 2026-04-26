@@ -4,7 +4,8 @@
 //!
 //! See `docs/superpowers/specs/2026-04-24-callers-with-context-design.md`.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Maximum context lines to return per hit. Guards against pathological
 /// multi-line chains (e.g. hundred-line builder calls). Most enclosing
@@ -16,6 +17,20 @@ const MAX_CONTEXT_LINES: usize = 20;
 /// around a call expression; 8 covers realistic nesting.
 const MAX_ANCESTOR_HOPS: usize = 8;
 
+/// Maximum entries in the thread-local parse cache. Bounded to prevent
+/// memory drift across many `callers_of` invocations. 16 entries covers
+/// the common case where all callers cluster in 1-3 files.
+const PARSE_CACHE_CAPACITY: usize = 16;
+
+thread_local! {
+    /// Cache of parsed tree-sitter trees keyed by (file_path, blake3_hash
+    /// of source text). The hash ensures we detect file modifications
+    /// without re-reading. Bounded to `PARSE_CACHE_CAPACITY` — evicts
+    /// oldest entry when full.
+    static PARSE_CACHE: std::cell::RefCell<HashMap<(PathBuf, blake3::Hash), tree_sitter::Tree>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
 /// Return the enclosing statement's text around a call at `line` in
 /// `file`. Best-effort: returns `None` only when the file is
 /// unreadable or the language isn't supported by any of our
@@ -23,14 +38,54 @@ const MAX_ANCESTOR_HOPS: usize = 8;
 /// statement ancestor, falls back to a ±1 line window.
 ///
 /// `line` is 1-based (matching `Edge.line` in the graph).
+///
+/// Uses a thread-local parse cache keyed by (path, source-hash) so
+/// that multiple callers in the same file share a single tree-sitter
+/// parse — the dominant cost in context extraction.
 #[must_use]
 pub fn enclosing_statement(file: &Path, line: u32) -> Option<String> {
     let source = std::fs::read_to_string(file).ok()?;
     let language = detect_language(file)?;
-    if let Some(text) = extract_via_ast(&source, line, language) {
+
+    // Check / populate the parse cache so N callers in the same file
+    // share one tree-sitter parse (the dominant cost).
+    let source_hash = blake3::hash(source.as_bytes());
+    let cache_key = (file.to_path_buf(), source_hash);
+
+    let tree = PARSE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(tree) = cache.get(&cache_key) {
+            return Some(tree.clone());
+        }
+        // Parse and cache. Evict oldest entry if at capacity.
+        let parsed = parse_source(&source, language)?;
+        if cache.len() >= PARSE_CACHE_CAPACITY {
+            // Remove the first (oldest) entry — HashMap iteration order
+            // is stable enough for LRU-ish eviction in practice.
+            if let Some(key) = cache.keys().next().cloned() {
+                cache.remove(&key);
+            }
+        }
+        cache.insert(cache_key, parsed.clone());
+        Some(parsed)
+    })?;
+
+    if let Some(text) = extract_via_ast(&source, &tree, line, language) {
         return Some(text);
     }
     Some(line_window_fallback(&source, line, 1))
+}
+
+/// Parse `source` with the appropriate tree-sitter parser for `lang`.
+/// Returns `None` if the parser can't be acquired or the parse fails.
+fn parse_source(source: &str, lang: Language) -> Option<tree_sitter::Tree> {
+    match lang {
+        Language::Rust => RS_PARSER.with(|cell| cell.borrow_mut().parse(source, None)),
+        Language::Python => PY_PARSER.with(|cell| cell.borrow_mut().parse(source, None)),
+        Language::TypeScript => TS_PARSER.with(|cell| cell.borrow_mut().parse(source, None)),
+        Language::Tsx => TSX_PARSER.with(|cell| cell.borrow_mut().parse(source, None)),
+        Language::JavaScript => JS_PARSER.with(|cell| cell.borrow_mut().parse(source, None)),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,13 +129,13 @@ fn line_window_fallback(source: &str, line: u32, radius: u32) -> String {
 // thread-local Parser (Parser is not Send-safe, matching
 // src/parse/rust.rs's pattern).
 
-fn extract_via_ast(source: &str, line: u32, lang: Language) -> Option<String> {
+fn extract_via_ast(source: &str, tree: &tree_sitter::Tree, line: u32, lang: Language) -> Option<String> {
     match lang {
-        Language::Rust => extract_rust(source, line),
-        Language::Python => extract_python(source, line),
-        Language::TypeScript => extract_typescript(source, line),
-        Language::Tsx => extract_tsx(source, line),
-        Language::JavaScript => extract_javascript(source, line),
+        Language::Rust => extract_rust(source, tree, line),
+        Language::Python => extract_python(source, tree, line),
+        Language::TypeScript => extract_typescript(source, tree, line),
+        Language::Tsx => extract_tsx(source, tree, line),
+        Language::JavaScript => extract_javascript(source, tree, line),
     }
 }
 
@@ -96,13 +151,10 @@ thread_local! {
     });
 }
 
-fn extract_rust(source: &str, line: u32) -> Option<String> {
-    RS_PARSER.with(|cell| {
-        let tree = cell.borrow_mut().parse(source, None)?;
-        let call = deepest_call_at_line(&tree.root_node(), line)?;
-        let stmt = climb_to_statement(call, RUST_STATEMENT_KINDS)?;
-        extract_node_text(source, stmt)
-    })
+fn extract_rust(source: &str, tree: &tree_sitter::Tree, line: u32) -> Option<String> {
+    let call = deepest_call_at_line(&tree.root_node(), line)?;
+    let stmt = climb_to_statement(call, RUST_STATEMENT_KINDS)?;
+    extract_node_text(source, stmt)
 }
 
 const RUST_STATEMENT_KINDS: &[&str] = &[
@@ -125,13 +177,10 @@ thread_local! {
     });
 }
 
-fn extract_python(source: &str, line: u32) -> Option<String> {
-    PY_PARSER.with(|cell| {
-        let tree = cell.borrow_mut().parse(source, None)?;
-        let call = deepest_call_at_line(&tree.root_node(), line)?;
-        let stmt = climb_to_statement(call, PY_STATEMENT_KINDS)?;
-        extract_node_text(source, stmt)
-    })
+fn extract_python(source: &str, tree: &tree_sitter::Tree, line: u32) -> Option<String> {
+    let call = deepest_call_at_line(&tree.root_node(), line)?;
+    let stmt = climb_to_statement(call, PY_STATEMENT_KINDS)?;
+    extract_node_text(source, stmt)
 }
 
 const PY_STATEMENT_KINDS: &[&str] = &[
@@ -153,13 +202,10 @@ thread_local! {
     });
 }
 
-fn extract_typescript(source: &str, line: u32) -> Option<String> {
-    TS_PARSER.with(|cell| {
-        let tree = cell.borrow_mut().parse(source, None)?;
-        let call = deepest_call_at_line(&tree.root_node(), line)?;
-        let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
-        extract_node_text(source, stmt)
-    })
+fn extract_typescript(source: &str, tree: &tree_sitter::Tree, line: u32) -> Option<String> {
+    let call = deepest_call_at_line(&tree.root_node(), line)?;
+    let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
+    extract_node_text(source, stmt)
 }
 
 thread_local! {
@@ -172,13 +218,10 @@ thread_local! {
     });
 }
 
-fn extract_tsx(source: &str, line: u32) -> Option<String> {
-    TSX_PARSER.with(|cell| {
-        let tree = cell.borrow_mut().parse(source, None)?;
-        let call = deepest_call_at_line(&tree.root_node(), line)?;
-        let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
-        extract_node_text(source, stmt)
-    })
+fn extract_tsx(source: &str, tree: &tree_sitter::Tree, line: u32) -> Option<String> {
+    let call = deepest_call_at_line(&tree.root_node(), line)?;
+    let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
+    extract_node_text(source, stmt)
 }
 
 const TS_STATEMENT_KINDS: &[&str] = &[
@@ -201,16 +244,13 @@ thread_local! {
     });
 }
 
-fn extract_javascript(source: &str, line: u32) -> Option<String> {
-    JS_PARSER.with(|cell| {
-        let tree = cell.borrow_mut().parse(source, None)?;
-        let call = deepest_call_at_line(&tree.root_node(), line)?;
-        // JS and TS share statement kind names in the tree-sitter grammars —
-        // lexical_declaration, expression_statement, return_statement, etc.
-        // — so the TS kind list applies as-is.
-        let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
-        extract_node_text(source, stmt)
-    })
+fn extract_javascript(source: &str, tree: &tree_sitter::Tree, line: u32) -> Option<String> {
+    let call = deepest_call_at_line(&tree.root_node(), line)?;
+    // JS and TS share statement kind names in the tree-sitter grammars —
+    // lexical_declaration, expression_statement, return_statement, etc.
+    // — so the TS kind list applies as-is.
+    let stmt = climb_to_statement(call, TS_STATEMENT_KINDS)?;
+    extract_node_text(source, stmt)
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────
