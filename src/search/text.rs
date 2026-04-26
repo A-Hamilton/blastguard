@@ -69,6 +69,10 @@ pub fn grep(project_root: &Path, pattern: &str) -> Vec<SearchHit> {
         }
     }
 
+    // Sort by (file, line) so results are deterministic and grouped
+    // by file — helps the agent scan grep output efficiently.
+    hits.sort_by(|a, b| (a.file.as_path(), a.line).cmp(&(b.file.as_path(), b.line)));
+
     hits
 }
 
