@@ -39,11 +39,43 @@ pub fn find(graph: &CodeGraph, name: &str, max_hits: usize) -> Vec<SearchHit> {
         }
         files.len()
     };
+    let file_names: Vec<String> = {
+        let mut names: Vec<String> = hits
+            .iter()
+            .filter(|h| !h.file.as_os_str().is_empty())
+            .map(|h| {
+                h.file
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    };
     let count_hint = if symbol_count > 0 {
+        let files_part = if file_count == 1 {
+            format!(" in {}", file_names.first().map_or("?", |s| s.as_str()))
+        } else {
+            let listed: Vec<&str> = file_names
+                .iter()
+                .take(3)
+                .map(std::string::String::as_str)
+                .collect();
+            let more = file_count.saturating_sub(3);
+            if more > 0 {
+                format!(
+                    " across {file_count} files (e.g. {}, +{more} more)",
+                    listed.join(", "),
+                )
+            } else {
+                format!(" across {file_count} files ({})", listed.join(", "))
+            }
+        };
         format!(
-            "=== {symbol_count} symbol{} matching '{name}' in {file_count} file{} ===",
+            "=== {symbol_count} symbol{} matching '{name}'{files_part} ===",
             if symbol_count == 1 { "" } else { "s" },
-            if file_count == 1 { "" } else { "s" },
         )
     } else {
         format!("=== 0 symbols matching '{name}' ===")
