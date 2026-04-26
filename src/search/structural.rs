@@ -582,7 +582,7 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
     let Some(symbol_ids) = graph.file_symbols.get(file) else {
         return Vec::new();
     };
-    let mut hits: Vec<SearchHit> = symbol_ids
+    let symbols: Vec<&Symbol> = symbol_ids
         .iter()
         .filter_map(|id| graph.symbols.get(id))
         .filter(|s| {
@@ -591,9 +591,21 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
                 crate::graph::types::Visibility::Export | crate::graph::types::Visibility::Public
             )
         })
-        .map(SearchHit::structural)
         .collect();
-    hits.sort_by_key(|h| h.line);
+
+    // Build hits and track which are methods for the collapse pass.
+    let mut hits: Vec<SearchHit> = symbols.iter().map(|s| SearchHit::structural(s)).collect();
+    let mut is_method: Vec<bool> = symbols
+        .iter()
+        .map(|s| s.id.kind == crate::graph::types::SymbolKind::Method)
+        .collect();
+    // Sort both in parallel by line.
+    {
+        let mut indices: Vec<usize> = (0..hits.len()).collect();
+        indices.sort_by_key(|&i| hits[i].line);
+        hits = indices.iter().map(|&i| hits[i].clone()).collect();
+        is_method = indices.iter().map(|&i| is_method[i]).collect();
+    }
 
     // Tag duplicate-name entries after the first occurrence as `[test]`.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -607,6 +619,39 @@ pub fn outline_of(graph: &CodeGraph, file: &std::path::Path) -> Vec<SearchHit> {
             hit.signature = Some(tagged);
         }
     }
+
+    // Collapse consecutive method entries (SymbolKind::Method) into a single
+    // `impl { (N methods) }` summary entry. Methods make up 30-50% of public
+    // symbols in Rust files but carry minimal orientation value — agents outline
+    // to find types, then drill into specific methods via `find` or `callers of`.
+    // This pass runs BEFORE test-function collapse so the method-kind tracking
+    // stays parallel to the pre-collapse hits vec.
+    let mut collapsed: Vec<SearchHit> = Vec::with_capacity(hits.len());
+    let mut i = 0;
+    while i < hits.len() {
+        if is_method[i] {
+            let group_start = i;
+            let mut count = 1;
+            i += 1;
+            while i < hits.len() && is_method[i] {
+                count += 1;
+                i += 1;
+            }
+            if count >= 2 {
+                let first = &hits[group_start];
+                collapsed.push(SearchHit {
+                    signature: Some(format!("impl {{ ({count} methods) }}")),
+                    ..first.clone()
+                });
+            } else {
+                collapsed.push(hits[group_start].clone());
+            }
+        } else {
+            collapsed.push(hits[i].clone());
+            i += 1;
+        }
+    }
+    let hits = collapsed;
 
     // Collapse consecutive test-function entries (names starting with `test_`)
     // into a single `[test] (N functions)` summary entry. Test functions make
