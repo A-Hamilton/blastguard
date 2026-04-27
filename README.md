@@ -98,7 +98,7 @@ attribution after a batch of edits.
 This is a Phase 1 MVP with a specific, measured value proposition — and a
 specific claim that is **not yet verified**.
 
-### What the measurements actually show (Round 13, Gemma 4 26B A4B, full 10-task × 3-seed × 2-arm suite)
+### Round 13 baseline (Apr 24, Gemma 4 26B A4B, full 10-task × 3-seed × 2-arm)
 
 - **3–10× cheaper.** Median input tokens −61% to −87% on 7 of 10 tasks; BG
   more expensive on 3 multi-hop tasks where it calls BlastGuard + native
@@ -108,17 +108,51 @@ specific claim that is **not yet verified**.
 - **Tied on correctness.** Deterministic substring grader: BG 22/30 vs raw
   23/30. Judge correctness axis: BG 5 / raw 10 / ties 15. Not a correctness
   win, not a correctness loss — statistically a tie.
-- **Loses on substance.** LLM-judge substance axis: raw 20 wins, BG 7. BG's
-  palette-constrained answers are shorter and thinner than raw's free-form
-  exploration. BG wins conciseness 8–7–15, which is the same phenomenon from
-  the other side.
+- **Lost on substance.** LLM-judge substance axis: raw 20 wins, BG 7. BG's
+  palette-constrained answers were shorter and thinner than raw's free-form
+  exploration.
 
-**Honest framing: a cost-quality tradeoff.** BlastGuard is decisively cheaper
-and faster at roughly-equivalent correctness on this model. It is not
-currently a quality-ahead tool by absolute measure.
+### Autonomous improvement loop (Apr 26, post-Round-13)
 
-See `docs/MICROBENCH.md` Round 13 section for the full tables and prior
-rounds' learning trajectory.
+After Round 13 a self-improving spike loop ran for ~24h, proposing one
+hypothesis at a time, gating each on n=3 microbench against a 3-task canary
+(`callers-apply-edit`, `outline-tree-sitter-rust`, `find-tamper-patterns`).
+30 hypotheses merged; 18 discarded for regressions or no improvement.
+
+The loop **saturated** at 2026-04-26 23:36 UTC — 10 consecutive hypotheses
+produced no measurable improvement, indicating a locally-flat gradient at
+this code state. Headline wins from the run:
+
+| Change | Impact (per-task, on the canary the loop benched) |
+|---|---|
+| Replace `[helpers] (N functions)` collapse with explicit name list | outline tokens **−92.5%** |
+| Strip Rust doc-comment lines from `compact_signature` | outline tokens **−62%** |
+| Filter `outline_of` to function-kind symbols | outline tokens **−42.9%** |
+| Strip return types from outline / caller / callee signatures | further outline + caller reductions |
+| Prepend count headers to grep / find / callers (`=== N matches in M files ===`) | find-tamper-patterns tokens **−19.8%**, fewer follow-up calls |
+| Truncate grep snippets at 120 chars (preserve match anchor at left) | find-tamper-patterns tokens **−21.5%** |
+| Inject callee signature as context prefix in `callers_of` results | callers tokens dropped substantially; agent stops grep-confirming |
+| `MAX_ANCESTOR_HOPS` 8 → 16 (deeper AST context) | callers-apply-edit grader **+33pp** |
+| Add control-flow statement kinds to `RUST_STATEMENT_KINDS` | callers-apply-edit grader **0.67 → 1.00** |
+| `// args:` annotations in caller context (call-site arguments) | better disambiguation for overloaded names |
+| Sort grep results deterministically by `(file, line)` | scannability + caching |
+
+These were validated on the 3-task canary, not the full 10-task suite. A
+fresh full-suite run (Round 16) is needed to confirm cumulative impact in
+context — the per-task numbers above are real but composed gains can be
+smaller than the sum of their parts on a different task mix.
+
+The loop itself, the discard rationale for each rejected hypothesis, and the
+durable "patterns to avoid" list are in
+`~/.zeroclaw-blastguard/workspace/state/bg-spike-memory.md` (the
+forensic record).
+
+**Honest framing remains: a cost-quality tradeoff** — now considerably more
+favourable on the canary tasks, but still not validated against SWE-bench
+Pro / Verified, which is the metric the spec says will gate release.
+
+See `docs/MICROBENCH.md` for full Round-13 tables + prior rounds' learning
+trajectory.
 
 ### What is NOT measured (and why)
 
@@ -165,8 +199,10 @@ differentiator for any SWE-bench-adjacent tool.
 
 ### What's verified today (not projected)
 
-- Rust codebase: 284 library tests pass, clippy pedantic clean,
-  `cargo fmt` clean.
+- Rust codebase: **317 library tests pass** (up from 284 at Round 13 — the
+  spike loop's accepted improvements all carry their own tests), clippy
+  pedantic clean, `cargo fmt` clean. Bench harness (`bench/`) has 39 Python
+  tests passing under `pytest`, ruff clean.
 - MCP handshake + all three tools live-tested against the release
   binary. Every MCP-facing response renders project-relative paths —
   no absolute tempdir / home prefixes leak into agent context.
